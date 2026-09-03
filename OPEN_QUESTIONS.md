@@ -5,18 +5,6 @@ DECISIONS.md and delete the entry here.
 
 ---
 
-## Q-001: Alpaca MCP server tool names and argument schemas
-
-Multi-leg capability itself is confirmed (D-027). What remains is the exact wire
-surface.
-
-- **Blocking:** Phase 7 for the order tools; Phase 1 for the `REQUIRED_TOOLS` assertion.
-- **Options:** The capability set in docs/INTEGRATIONS.md (`account`, `positions`, `orders_list`, `place_mleg_order`, `cancel_order`, `close_position`) is what the system needs, but the server's actual tool names and argument shapes are unverified — in particular how legs are represented (list of OCC symbols with sides, versus a structured spread type), and whether limit price is expressed as a net credit, net debit, or signed value.
-- **Resolve by:** Connecting to the MCP server and listing its tools. Read the schemas off the live server; do not infer them from the REST API docs, which may not match the MCP surface.
-- **Depends on it:** `mcp_client.REQUIRED_TOOLS`, the `place_mleg_order` signature, and the sign convention in `submit_with_ladder`'s price ladder. Getting the credit/debit sign wrong will submit orders at inverted prices that either fill instantly at a bad price or never fill — verify the convention against one small test order before Phase 7's criteria are considered met.
-
----
-
 ## Q-002: Does the free indicative feed populate greeks and implied volatility?
 
 - **Blocking:** Phase 3. Phase 2 works either way by logging and skipping.
@@ -39,8 +27,9 @@ surface.
 
 - **Blocking:** Phase 4.
 - **Options:** Two tiers are needed — a smaller model for regime labeling and a larger one for structure construction. Model availability on Groq's free tier changes, and per-minute and per-day request and token limits are not currently known.
-- **Resolve by:** Listing available models on the Groq account and reading the current free-tier limits. Record both model IDs in `config/params.yaml:llm.tiers` and confirm the worst-case call volume fits: 7 symbols × 2 sites × 26 scans per session is an upper bound of roughly 360 calls/day, well under typical limits, but this should be checked rather than assumed.
+- **Resolve by:** Listing available models on the Groq account (`GET /openai/v1/models` with the real key, or `GET https://api.groq.com/openai/v1/models`) and reading the current free-tier limits from Groq's own docs/console. Record both model IDs in `config/params.yaml:llm.tiers` and confirm the worst-case call volume fits: 7 symbols × 2 sites × 26 scans per session is an upper bound of roughly 360 calls/day, well under typical limits, but this should be checked rather than assumed.
 - **Depends on it:** `llm.tiers` config, `complete()` routing. If the free tier proves too tight, the correct response is lengthening `entry_scan` and `regime_refresh` intervals, not removing an LLM site.
+- **Research lead, not a resolution:** third-party pricing aggregators (not Groq's own docs) suggest Groq's free tier currently offers Llama 3.1 8B, Llama 3.3 70B Versatile, GPT-OSS 120B/20B, Llama 4 Scout/Maverick, Mistral Saba, Qwen 3, and Kimi K2, with limits in the neighborhood of 30 RPM / 1,000 RPD / 12,000 TPM for Llama 3.3 70B Versatile specifically. This is not authoritative enough to write into `config/params.yaml` (unlike D-028, which came from the vendor's own source code) — exact model ID strings drift and a wrong one just 400s at runtime. Confirm against the live account before filling in `llm.tiers`.
 
 ---
 

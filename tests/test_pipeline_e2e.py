@@ -103,7 +103,7 @@ def wired_pipeline(db_conn, monkeypatch):
 
     fill_state = {"order_id": "order-1"}
 
-    def fake_place_mleg_order(legs, qty, limit_price, side):
+    def fake_place_mleg_order(legs, qty, limit_price, side, *, is_opening):
         return fill_state["order_id"]
 
     def fake_list_orders(status="open"):

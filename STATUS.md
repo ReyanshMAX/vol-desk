@@ -2,15 +2,21 @@
 
 **Last updated:** 2026-09-03
 **Current phase:** all 9 phases implemented in code and unit-tested against
-fixtures; none verified against the live Alpaca MCP server or Groq (no
-credentials/host available in this session). Treat every phase as
-**code-complete, integration-unverified** until run on the VM per
-docs/DEPLOY.md.
-**Next action:** Resolve OPEN_QUESTIONS.md Q-001 (connect to the live Alpaca
-MCP server, list its tools, fill in `src/execution/mcp_client.REQUIRED_TOOLS`)
-and Q-003 (strike increments per symbol, fill in `config/universe.yaml`).
-Both block ever running Phase 1's boot sequence for real. Q-004 (Groq model
-IDs) blocks any real LLM call. See "Blocked" below.
+fixtures. Q-001 (MCP tool names/schemas) is now resolved from the vendor's
+own source (D-028) rather than blocking on live access, but nothing has
+actually connected to a live Alpaca MCP server, Groq, or run on a VM yet —
+this session had `.env`-style credentials mentioned but not actually present
+in the container (see "Blocked"). Treat every phase as **code-complete,
+live-unverified**.
+**Next action:** Get real credentials into this session (or a session with
+filesystem access to them) via `ALPACA_API_KEY`/`ALPACA_SECRET_KEY`/
+`GROQ_API_KEY` env vars, install `uv` (`curl -LsSf https://astral.sh/uv/install.sh | sh`),
+set `ALPACA_MCP_COMMAND=uvx alpaca-mcp-server`, and run `python -m src.main`
+locally to exercise Phase 1's boot sequence for real — first likely failure
+point is Q-003 (strike increments, still null in `config/universe.yaml`),
+which blocks `iv.ensure_seeded()` (boot step 5) for every symbol. Q-004
+(Groq model IDs) blocks any real LLM call but not boot itself (D-010
+degrades gracefully). See "Blocked" below.
 
 ---
 
@@ -28,10 +34,15 @@ Alpaca or Groq calls made:_
   interface from docs/DATA.md
 - `src/scheduler.py` — job registration, NYSE market-hours gating via
   `pandas-market-calendars`, trading-window helper for entry_scan
-- `src/execution/mcp_client.py` — connect/list-tools/assert-required-tools
-  path; capability calls (`get_account`, `place_mleg_order`, etc.) raise a
-  clear `MCPToolsUnresolvedError` until Q-001 is resolved and
-  `REQUIRED_TOOLS` is filled in from a live tool listing
+- `src/execution/mcp_client.py` — `REQUIRED_TOOLS` now maps to the real
+  `alpacahq/alpaca-mcp-server` v2 tool names and argument schema (D-028,
+  resolved from the vendor's own published source, not guessed); wire-format
+  translation (signed multi-leg limit price, unsigned qty+side on positions,
+  `id` vs `order_id`, `legs` vs `symbols`) covered by
+  `tests/test_mcp_client.py`. Subprocess env passthrough was also a real gap
+  fixed this session -- `StdioServerParameters` doesn't inherit the parent
+  process's environment, so the MCP subprocess wouldn't have seen
+  `ALPACA_API_KEY`/`ALPACA_SECRET_KEY` at all without this
 - `src/data/alpaca_data.py`, `iv.py`, `backfill.py` — bar/chain fetch,
   OCC symbol construction, Black-Scholes inversion via `scipy.optimize.brentq`,
   live IV snapshotting, cold-start backfill
@@ -47,18 +58,19 @@ Alpaca or Groq calls made:_
   boot-time reconciliation (MATCHED/ORPHAN/GHOST/IN_FLIGHT)
 - `src/main.py` — full boot sequence (steps 1-6) and all six scheduled jobs
   wired into the entry pipeline from docs/ARCHITECTURE.md
-- `tests/` — 69 passing tests: unit coverage for the deterministic layer
+- `tests/` — 78 passing tests: unit coverage for the deterministic layer
   (BS inversion round-trip, OCC symbol construction, signal math, mechanical
   regime labeling, risk sizing/veto checks, strategy post-validation,
   position-management threshold math, config loading, reconciliation
-  grouping/orphan-adoption/ghost-closing), plus a mocked end-to-end
-  `entry_scan` pipeline test (`tests/test_pipeline_e2e.py`) that runs real
-  signal→regime→strategy→risk→orders code with only the Alpaca/Groq network
-  boundaries faked -- this caught two real bugs before they'd have hit a
-  live account (see Deviations)
-- `deploy/` — `provision.sh`, `vol-desk.service`, `vol-desk.env.example`:
-  the docs/DEPLOY.md commands as ready-to-run files, not yet run against a
-  real VM
+  grouping/orphan-adoption/ghost-closing, MCP wire-format translation), plus
+  a mocked end-to-end `entry_scan` pipeline test (`tests/test_pipeline_e2e.py`)
+  that runs real signal→regime→strategy→risk→orders code with only the
+  Alpaca/Groq network boundaries faked -- this caught two real bugs before
+  they'd have hit a live account (see Deviations)
+- `deploy/` — `provision.sh` (now also installs `uv`), `vol-desk.service`,
+  `vol-desk.env.example` (now has the real `ALPACA_MCP_COMMAND`): the
+  docs/DEPLOY.md commands as ready-to-run files, not yet run against a real
+  VM
 
 ## In progress
 
@@ -69,31 +81,49 @@ which are available in this session._
 
 ## Next up
 
-1. Resolve Q-001 against a live Alpaca MCP server; fill in
-   `mcp_client.REQUIRED_TOOLS`
-2. Resolve Q-003 (strike increments) and Q-004 (Groq model IDs); fill in
-   `config/universe.yaml` and `config/params.yaml:llm.tiers`
-3. Provision a host (Q-005) and run Phase 1's acceptance criteria for real
-   on the VM per docs/DEPLOY.md
-4. Work through Phases 2-9's acceptance criteria against the live services,
+1. Get real Alpaca/Groq credentials into an environment this agent can
+   actually run code against (see "Next action" above) -- a `.env` file on
+   the user's own machine is invisible to this remote session
+2. Place one small real multi-leg order once connected, to confirm D-028's
+   sign convention and field mapping against the live server (D-028's own
+   stated caveat -- reading source is strong evidence, not a substitute)
+3. Resolve Q-003 (strike increments) and Q-004 (Groq model IDs) against the
+   live services; fill in `config/universe.yaml` and
+   `config/params.yaml:llm.tiers`
+4. Provision a host (Q-005) and run Phase 1's acceptance criteria for real
+   on the VM per docs/DEPLOY.md / `deploy/provision.sh`
+5. Work through Phases 2-9's acceptance criteria against the live services,
    in order — the code exists for all of them but none has touched a real
    Alpaca or Groq endpoint yet
 
 ## Blocked
 
-- **Q-001** MCP tool names/argument schemas unverified — blocks ever
-  connecting for real; `mcp_client.py` is written to fail loudly and name
-  what's missing rather than guess
+- **No live credentials in this session.** The user mentioned a local
+  `.env` with Alpaca/Groq keys, but this session runs in an isolated remote
+  container with no access to the user's local filesystem -- nothing was
+  actually available to connect with. Needs env vars set on this session/
+  environment (or run locally with Claude Code CLI) to unblock any live
+  verification below.
 - **Q-002** does the free chain return IV — code handles both branches
   (`iv.snapshot_iv` falls back to inverting the quote mid), unverified live
 - **Q-003** strike increments per symbol — blocks backfill; `universe.yaml`
   intentionally left null rather than guessed
 - **Q-004** Groq model IDs and rate limits — blocks any real LLM call;
-  `params.yaml:llm.tiers` intentionally left null
+  `params.yaml:llm.tiers` intentionally left null (see OPEN_QUESTIONS.md for
+  an unverified research lead, not a resolution)
 - **Q-005** host not yet provisioned — nothing in this session had VM access
 
 ## Deviations from spec
 
+- **Q-001 resolved without a live connection.** OPEN_QUESTIONS.md's own
+  protocol says "ask, then move the answer to DECISIONS.md" -- there was no
+  live server to ask. Instead the vendor's own published source
+  (`alpacahq/alpaca-mcp-server`) was read directly, which is strong
+  evidence (not inference from REST docs, which is what Q-001 explicitly
+  warned against) but is not the same as a live call. Recorded as D-028
+  with that caveat stated explicitly and `assert_required_tools()` left in
+  place as the live check. Treat D-028 as provisional until one small real
+  order confirms it.
 - **Bugs found and fixed during a self-review pass, before any of this ran
   against a live account:**
   - `strategy.py` validated that a response's legs balanced (one buy, one

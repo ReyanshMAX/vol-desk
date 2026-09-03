@@ -24,6 +24,11 @@ if ! id -u voldesk >/dev/null 2>&1; then
     useradd --system --create-home --shell /usr/sbin/nologin voldesk
 fi
 
+echo "== uv (needed to run the Alpaca MCP server via 'uvx alpaca-mcp-server', D-028) =="
+if ! sudo -u voldesk bash -c 'command -v uv' >/dev/null 2>&1; then
+    sudo -u voldesk bash -c 'curl -LsSf https://astral.sh/uv/install.sh | sh'
+fi
+
 echo "== clone/update repo =="
 if [ -d "$INSTALL_DIR/.git" ]; then
     sudo -u voldesk git -C "$INSTALL_DIR" fetch origin

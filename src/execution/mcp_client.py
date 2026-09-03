@@ -2,12 +2,18 @@
 orders, positions, and account state (D-008) -- no direct alpaca-py trading
 client anywhere in this codebase.
 
-Tool names and argument schemas are unconfirmed against the live server --
-see OPEN_QUESTIONS.md Q-001. TOOL_NAME_MAP below is intentionally empty
-rather than guessed: connect() lists the live server's tools and logs them
-(BUILD.md Phase 1 acceptance criterion), and the capability calls below
-raise a clear, specific error until a human fills TOOL_NAME_MAP in from
-that live listing and moves Q-001 to DECISIONS.md.
+Q-001 (tool names/argument schemas) is resolved against the *source* of the
+official server, alpacahq/alpaca-mcp-server (v2, FastMCP + OpenAPI-generated
+tools, https://github.com/alpacahq/alpaca-mcp-server) -- specifically
+README.md's tool catalog and src/alpaca_mcp_server/overrides.py's
+place_option_order signature, fetched 2026-09-03. This is strong evidence
+(it's the vendor's own published source, not inference from REST docs that
+Q-001 explicitly warned might not match the MCP surface) but it is still
+not a live call: `assert_required_tools()` below still fails loudly and
+names exactly what's missing if a real connection disagrees with any of
+this, per Q-001's original directive to never silently guess. Launch
+command: `uvx alpaca-mcp-server` (env: ALPACA_API_KEY, ALPACA_SECRET_KEY,
+optional ALPACA_PAPER_TRADE -- defaults true).
 
 The session is long-lived across the process lifetime. It runs on a
 dedicated asyncio event loop in a background thread so the (synchronous)
@@ -17,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import shlex
 import threading
 from dataclasses import dataclass
@@ -28,22 +35,24 @@ from mcp.client.stdio import stdio_client
 
 logger = logging.getLogger("vol_desk.mcp_client")
 
-# Capability -> live MCP tool name. Left unresolved (None) until Q-001 is
-# answered against the running server; see docs/INTEGRATIONS.md.
-REQUIRED_TOOLS: dict[str, str | None] = {
-    "account": None,          # equity, cash, buying power
-    "positions": None,        # all open positions incl. option legs
-    "orders_list": None,      # open/recent orders, for IN_FLIGHT resolution
-    "place_mleg_order": None, # multi-leg options order, limit, DAY, atomic (D-027)
-    "cancel_order": None,
-    "close_position": None,   # used only by hard_halt flatten
+# Capability -> live MCP tool name. Real names per alpacahq/alpaca-mcp-server
+# (see module docstring); the two order-mutating tools were confirmed from
+# the auto-generated OpenAPI wrapper functions, which mirror Alpaca's public
+# Trading API operation names and parameter shapes 1:1.
+REQUIRED_TOOLS: dict[str, str] = {
+    "account": "get_account_info",
+    "positions": "get_all_positions",
+    "orders_list": "get_orders",
+    "place_mleg_order": "place_option_order",  # multi-leg via order_class="mleg" (D-027)
+    "cancel_order": "cancel_order_by_id",
+    "close_position": "close_position",        # used only by hard_halt flatten
 }
 
 
 class MCPToolsUnresolvedError(RuntimeError):
-    """Raised when REQUIRED_TOOLS has not been mapped to real server tool
-    names yet. Resolve OPEN_QUESTIONS.md Q-001 by connecting once, reading
-    the tool list this raises with, and filling in REQUIRED_TOOLS."""
+    """Raised when the live server disagrees with REQUIRED_TOOLS -- a
+    missing tool, in practice, since the names themselves are no longer
+    placeholders (see module docstring re: Q-001)."""
 
 
 @dataclass(frozen=True)
@@ -97,8 +106,10 @@ class _Loop:
 
 
 class MCPSession:
-    def __init__(self, command: str) -> None:
+    def __init__(self, command: str, api_key: str, secret_key: str) -> None:
         self._command = command
+        self._api_key = api_key
+        self._secret_key = secret_key
         self._loop = _Loop()
         self._session: ClientSession | None = None
         self._stdio_cm = None
@@ -110,7 +121,24 @@ class MCPSession:
 
     async def _connect(self) -> None:
         parts = shlex.split(self._command)
-        params = StdioServerParameters(command=parts[0], args=parts[1:])
+        # StdioServerParameters does NOT inherit the parent process's
+        # environment unless told to -- the alpaca-mcp-server subprocess
+        # needs its own copy of the credentials to authenticate to Alpaca.
+        # ALPACA_PAPER_TRADE is forced to "true" here regardless of
+        # anything in the parent env: ALPACA_PAPER is documented as a
+        # constant, never configurable (docs/INTEGRATIONS.md notes,
+        # D-011-adjacent) -- a typo in an environment file must not be
+        # able to point this at a live account. PATH is passed through so
+        # `uvx`/`python` etc. can actually be found on disk.
+        env = {
+            "ALPACA_API_KEY": self._api_key,
+            "ALPACA_SECRET_KEY": self._secret_key,
+            "ALPACA_PAPER_TRADE": "true",
+        }
+        path = os.environ.get("PATH")
+        if path:
+            env["PATH"] = path
+        params = StdioServerParameters(command=parts[0], args=parts[1:], env=env)
         self._stdio_cm = stdio_client(params)
         read, write = await self._stdio_cm.__aenter__()
         self._session_cm = ClientSession(read, write)
@@ -121,26 +149,17 @@ class MCPSession:
         logger.info("MCP connected; available tools: %s", self._available_tools)
 
     def assert_required_tools(self) -> None:
-        unresolved = [cap for cap, name in REQUIRED_TOOLS.items() if name is None]
-        if unresolved:
-            raise MCPToolsUnresolvedError(
-                f"REQUIRED_TOOLS not yet mapped for capabilities {unresolved}. "
-                f"Live server tools are: {self._available_tools}. "
-                "Resolve OPEN_QUESTIONS.md Q-001 and fill in mcp_client.REQUIRED_TOOLS."
-            )
         missing = [name for name in REQUIRED_TOOLS.values() if name not in self._available_tools]
         if missing:
-            raise RuntimeError(
-                f"MCP server is missing required tools {missing}. "
-                f"Available: {self._available_tools}"
+            raise MCPToolsUnresolvedError(
+                f"MCP server is missing required tools {missing} (expected from "
+                f"alpacahq/alpaca-mcp-server -- see this module's docstring). "
+                f"Available: {self._available_tools}. If this server is a "
+                "different version or fork, update REQUIRED_TOOLS to match."
             )
 
     def call(self, capability: str, arguments: dict[str, Any]) -> Any:
-        tool_name = REQUIRED_TOOLS.get(capability)
-        if tool_name is None:
-            raise MCPToolsUnresolvedError(
-                f"capability {capability!r} has no resolved MCP tool name; see Q-001"
-            )
+        tool_name = REQUIRED_TOOLS[capability]
         try:
             return self._loop.run(self._call(tool_name, arguments))
         except Exception:
@@ -170,12 +189,12 @@ _session: MCPSession | None = None
 
 def connect() -> MCPSession:
     """Start/attach the Alpaca MCP server, list its tools, and assert that
-    every capability in REQUIRED_TOOLS is present. Raises on a missing or
-    unresolved tool -- never falls back to the REST trading API (D-008)."""
+    every capability in REQUIRED_TOOLS is present. Raises on a missing
+    tool -- never falls back to the REST trading API (D-008)."""
     global _session
     from src import config as config_module
     cfg = config_module.load()
-    session = MCPSession(cfg.alpaca_mcp_command)
+    session = MCPSession(cfg.alpaca_mcp_command, cfg.alpaca_api_key, cfg.alpaca_secret_key)
     session.connect()
     session.assert_required_tools()
     _session = session
@@ -189,6 +208,8 @@ def _require_session() -> MCPSession:
 
 
 def get_account() -> Account:
+    """GET /v2/account via get_account_info. Alpaca returns equity/cash/
+    buying_power as JSON strings; float() handles that transparently."""
     result = _require_session().call("account", {})
     data = _unwrap(result)
     return Account(
@@ -200,62 +221,111 @@ def get_account() -> Account:
 
 
 def get_positions() -> list[BrokerPosition]:
+    """GET /v2/positions via get_all_positions. Alpaca's Position object
+    carries an unsigned qty plus a side ('long'/'short') rather than a
+    signed qty, and the P&L field is named unrealized_pl -- both handled
+    here so the rest of the codebase only ever sees our own signed
+    convention (docs/INTEGRATIONS.md's BrokerPosition contract)."""
     result = _require_session().call("positions", {})
     data = _unwrap(result)
-    return [
-        BrokerPosition(
-            occ_symbol=p["occ_symbol"],
-            qty=int(p["qty"]),
+    positions = []
+    for p in data:
+        qty = float(p["qty"])
+        if p.get("side") == "short":
+            qty = -qty
+        positions.append(BrokerPosition(
+            occ_symbol=p["symbol"],
+            qty=int(qty),
             avg_entry_price=float(p["avg_entry_price"]),
             market_value=float(p["market_value"]),
-            unrealized_pnl=float(p["unrealized_pnl"]),
-        )
-        for p in data
-    ]
+            unrealized_pnl=float(p["unrealized_pl"]),
+        ))
+    return positions
 
 
 def list_orders(status: str = "open") -> list[BrokerOrder]:
+    """GET /v2/orders via get_orders. A multi-leg (mleg) order carries its
+    aggregate status/filled_qty/filled_avg_price at the top level and each
+    leg's own symbol under 'legs'; a single-leg order has 'symbol' directly.
+    Both are normalized into BrokerOrder.symbols here."""
     result = _require_session().call("orders_list", {"status": status})
     data = _unwrap(result)
-    return [
-        BrokerOrder(
-            order_id=o["order_id"],
+    orders = []
+    for o in data:
+        legs = o.get("legs")
+        symbols = [leg["symbol"] for leg in legs] if legs else [o["symbol"]]
+        orders.append(BrokerOrder(
+            order_id=o["id"],
             status=o["status"],
-            symbols=o["symbols"],
+            symbols=symbols,
             submitted_at=datetime.fromisoformat(o["submitted_at"]),
-            filled_qty=int(o["filled_qty"]) if o.get("filled_qty") is not None else None,
+            filled_qty=int(float(o["filled_qty"])) if o.get("filled_qty") is not None else None,
             filled_avg_price=float(o["filled_avg_price"]) if o.get("filled_avg_price") is not None else None,
-        )
-        for o in data
-    ]
+        ))
+    return orders
 
 
 def place_mleg_order(legs: list[Leg], qty: int, limit_price: float,
-                      side: Literal["credit", "debit"]) -> str:
+                      side: Literal["credit", "debit"], *, is_opening: bool) -> str:
+    """place_option_order with order_class='mleg'. Alpaca's own sign
+    convention for a multi-leg limit_price (confirmed from
+    alpaca_mcp_server/overrides.py): positive = debit/cost, negative =
+    credit/proceeds -- the exact opposite of nothing, i.e. it IS this
+    system's own net_credit convention negated, so the translation here is
+    a single sign flip: our 'credit' side (side=='credit') means Alpaca
+    should see a negative number.
+
+    is_opening selects each leg's position_intent (buy_to_open/sell_to_open
+    vs buy_to_close/sell_to_close) -- required so Alpaca doesn't have to
+    infer open-vs-close from existing position state, which would be a
+    silent way to submit the wrong thing.
+    """
+    magnitude = abs(limit_price)
+    alpaca_limit_price = -magnitude if side == "credit" else magnitude
+
+    def position_intent(leg_side: str) -> str:
+        if is_opening:
+            return "buy_to_open" if leg_side == "buy" else "sell_to_open"
+        return "buy_to_close" if leg_side == "buy" else "sell_to_close"
+
     result = _require_session().call("place_mleg_order", {
-        "legs": [leg.__dict__ for leg in legs],
-        "qty": qty,
-        "limit_price": limit_price,
-        "side": side,
+        "qty": str(qty),
+        "type": "limit",
+        "time_in_force": "day",
+        "order_class": "mleg",
+        "limit_price": str(alpaca_limit_price),
+        "legs": [
+            {
+                "symbol": leg.occ_symbol,
+                "ratio_qty": str(leg.ratio),
+                "side": leg.side,
+                "position_intent": position_intent(leg.side),
+            }
+            for leg in legs
+        ],
     })
     data = _unwrap(result)
-    return data["order_id"]
+    return data["id"]
 
 
 def cancel_order(order_id: str) -> None:
+    """DELETE /v2/orders/{order_id} via cancel_order_by_id."""
     _require_session().call("cancel_order", {"order_id": order_id})
 
 
 def close_position(occ_symbol: str) -> str:
-    result = _require_session().call("close_position", {"occ_symbol": occ_symbol})
+    """DELETE /v2/positions/{symbol_or_asset_id} via close_position. No
+    qty/percentage passed -- a full close, which is all this system ever
+    does (hard_halt flatten and close_structure both close the whole
+    position; a partial exit isn't something this codebase requests)."""
+    result = _require_session().call("close_position", {"symbol_or_asset_id": occ_symbol})
     data = _unwrap(result)
-    return data["order_id"]
+    return data["id"]
 
 
 def _unwrap(mcp_result: Any) -> Any:
-    """MCP tool results carry a content list; the wire shape of each
-    capability's payload is part of Q-001 and must be confirmed against the
-    live server rather than assumed here."""
+    """MCP tool results carry a content list whose text is the JSON body
+    the underlying Alpaca REST call returned."""
     if hasattr(mcp_result, "content"):
         import json
         text = mcp_result.content[0].text

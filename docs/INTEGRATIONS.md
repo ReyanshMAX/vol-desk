@@ -33,21 +33,35 @@ def connect() -> MCPSession:
     """
 ```
 
-**Tool names and argument schemas must be read from the live server's tool list
-before implementation, not assumed.** See OPEN_QUESTIONS.md Q-001. The capability
-set below is what the system needs; the actual names are to be confirmed.
+**Resolved (D-028)** against `alpacahq/alpaca-mcp-server` v2's published source
+(README.md's tool catalog and `src/alpaca_mcp_server/overrides.py`'s
+`place_option_order` signature) — see D-028 for the full mapping and its
+caveats. `connect()` still calls `assert_required_tools()` against the live
+server rather than trusting this table blindly, and one small real order
+should still be placed and checked before Phase 7 is considered done.
 
 ```python
 REQUIRED_TOOLS = {
-    "account":         ...,   # equity, cash, buying power
-    "positions":       ...,   # all open positions incl. option legs
-    "orders_list":     ...,   # open/recent orders, for IN_FLIGHT resolution
-    "place_mleg_order":...,   # multi-leg options order, limit, DAY — atomic, all legs
-                              # in one submission (D-027). Never leg in sequentially.
-    "cancel_order":    ...,
-    "close_position":  ...,   # used only by hard_halt flatten
+    "account":          "get_account_info",
+    "positions":        "get_all_positions",
+    "orders_list":      "get_orders",
+    "place_mleg_order": "place_option_order",  # order_class="mleg" (D-027);
+                                                # atomic, all legs in one submission
+    "cancel_order":     "cancel_order_by_id",
+    "close_position":   "close_position",      # used only by hard_halt flatten
 }
 ```
+
+The server's own field names differ from ours in a few places the wrapper
+translates so nothing above `mcp_client.py` has to know: `Position.qty` is
+unsigned with a separate `side` ("long"/"short") rather than a signed qty;
+`Position.unrealized_pl` (not `unrealized_pnl`); `Order.id` (not `order_id`);
+a multi-leg order's per-leg symbols live under `Order.legs`, not a top-level
+list. Most importantly, `place_option_order`'s multi-leg `limit_price` is a
+single signed number where **positive = debit/cost, negative =
+credit/proceeds** — the opposite sign of this system's own `net_credit`
+convention — so `place_mleg_order` below negates internally rather than
+exposing that inversion to callers.
 
 ### Wrapper interface
 
@@ -73,7 +87,10 @@ def get_account() -> Account: ...
 def get_positions() -> list[BrokerPosition]: ...
 def list_orders(status: str = "open") -> list[BrokerOrder]: ...
 def place_mleg_order(legs: list[Leg], qty: int, limit_price: float,
-                     side: Literal["credit","debit"]) -> str: ...   # returns order_id
+                     side: Literal["credit","debit"], *, is_opening: bool) -> str: ...
+    # returns order_id. is_opening selects each leg's position_intent
+    # (buy_to_open/sell_to_open vs buy_to_close/sell_to_close) -- the real
+    # server wants that stated explicitly, not inferred from account state.
 def cancel_order(order_id: str) -> None: ...
 def close_position(occ_symbol: str) -> str: ...
 ```

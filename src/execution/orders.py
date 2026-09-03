@@ -39,7 +39,7 @@ def _mcp_legs(legs: list, reverse_sides: bool = False) -> list[mcp_client.Leg]:
 
 
 def _run_ladder(mcp_legs: list[mcp_client.Leg], qty: int, base_price: float,
-                 side: Literal["credit", "debit"]) -> FillResult:
+                 side: Literal["credit", "debit"], *, is_opening: bool) -> FillResult:
     cfg = config_module.load()
     ex = cfg.execution
     steps, step_pct, wait_s = ex["ladder_steps"], ex["ladder_step_pct"], ex["ladder_wait_seconds"]
@@ -51,7 +51,7 @@ def _run_ladder(mcp_legs: list[mcp_client.Leg], qty: int, base_price: float,
         else:
             limit = base_price * (1 + rung * step_pct)
 
-        order_id = mcp_client.place_mleg_order(mcp_legs, qty, limit, side)
+        order_id = mcp_client.place_mleg_order(mcp_legs, qty, limit, side, is_opening=is_opening)
         time.sleep(wait_s)
 
         orders = mcp_client.list_orders(status="all")
@@ -87,7 +87,7 @@ def submit_with_ladder(intent: OrderIntent, qty: int) -> FillResult:
     base_price = abs(intent.net_credit)
     mcp_legs = _mcp_legs(intent.legs)
 
-    result = _run_ladder(mcp_legs, qty, base_price, side)
+    result = _run_ladder(mcp_legs, qty, base_price, side, is_opening=True)
 
     if result.status == "ABANDONED":
         repo.log_decision(
@@ -166,7 +166,7 @@ def close_structure(p: Position, reason: str) -> FillResult:
     mark = _mark_to_market(p.legs, chain_by_symbol)
     base_price = abs(mark) if mark is not None else abs(p.entry_credit)
 
-    result = _run_ladder(mcp_legs, p.qty, base_price, closing_side)
+    result = _run_ladder(mcp_legs, p.qty, base_price, closing_side, is_opening=False)
 
     if result.status in ("FILLED", "PARTIAL") and result.fill_price is not None:
         close_price = result.fill_price
