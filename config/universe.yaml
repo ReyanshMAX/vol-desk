@@ -1,0 +1,11 @@
+# The seven tradable underlyings (D-019). strike_increment is unresolved — see
+# OPEN_QUESTIONS.md Q-003. Do not guess it; config.py fails loudly until it is
+# filled in from GET /v2/options/contracts against the live paper account.
+symbols:
+  - {ticker: SPY, cluster: equity_beta, strike_increment: null}
+  - {ticker: QQQ, cluster: equity_beta, strike_increment: null}
+  - {ticker: IWM, cluster: equity_beta, strike_increment: null}
+  - {ticker: GLD, cluster: metals,      strike_increment: null}
+  - {ticker: TLT, cluster: duration,    strike_increment: null}
+  - {ticker: XLE, cluster: energy,      strike_increment: null}
+  - {ticker: HYG, cluster: credit,      strike_increment: null}

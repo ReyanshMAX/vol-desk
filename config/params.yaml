@@ -1,0 +1,91 @@
+# Every tunable literal from docs/STRATEGY.md, docs/RISK.md, docs/DATA.md and
+# docs/INTEGRATIONS.md. Source of truth is the docs; this file is the seeded
+# defaults given there (docs/STRATEGY.md notes). No literal belongs in source.
+
+signal:
+  iv_rank_lookback_days: 60      # IV_RANK_LOOKBACK_DAYS
+  min_iv_observations: 20        # MIN_IV_OBSERVATIONS
+  trend_fast_days: 10             # TREND_FAST_DAYS
+  trend_slow_days: 30             # TREND_SLOW_DAYS
+  realized_vol_days: 20           # REALIZED_VOL_DAYS
+  trend_normalizer: 0.03          # TREND_NORMALIZER
+  min_iv_rank_for_credit: 0.35    # MIN_IV_RANK_FOR_CREDIT (entry gate)
+
+regime:
+  stress_iv_rank: 0.90            # STRESS_IV_RANK
+  stress_realized_vol: 0.45       # STRESS_REALIZED_VOL
+  high_iv_rank: 0.50              # HIGH_IV_RANK
+  range_threshold: 0.55           # RANGE_THRESHOLD
+  regime_ttl_minutes: 30          # REGIME_TTL_MINUTES
+
+strategy:
+  dte_min: 7                      # DTE_MIN
+  dte_max: 14                     # DTE_MAX
+  short_delta_target: 0.16        # SHORT_DELTA_TARGET
+  short_delta_band: [0.12, 0.20]  # SHORT_DELTA_BAND
+  debit_long_delta_target: 0.45   # DEBIT_LONG_DELTA_TARGET
+  debit_long_delta_band: [0.35, 0.55]  # DEBIT_LONG_DELTA_BAND
+  wing_width_min: 1.0             # WING_WIDTH_MIN
+  wing_width_max: 5.0             # WING_WIDTH_MAX
+  min_credit_to_width: 0.20       # MIN_CREDIT_TO_WIDTH
+  max_debit_to_width: 0.45        # MAX_DEBIT_TO_WIDTH
+  max_leg_spread_pct: 0.15        # MAX_LEG_SPREAD_PCT
+  min_leg_open_interest: 100      # MIN_LEG_OPEN_INTEREST
+  strike_range_pct: 0.15          # STRIKE_RANGE_PCT (chain filtering)
+
+management:
+  take_profit_pct: 0.50           # TAKE_PROFIT_PCT
+  stop_loss_mult: 2.00            # STOP_LOSS_MULT
+  force_close_dte: 2              # FORCE_CLOSE_DTE
+
+data:
+  atm_iv_target_dte: 10           # ATM_IV_TARGET_DTE
+  backfill_trading_days: 30       # BACKFILL_TRADING_DAYS
+  risk_free_rate: 0.04            # RISK_FREE_RATE (D-024)
+
+risk:
+  max_risk_per_trade_pct: 0.01    # 1% of equity as max loss on the position
+  soft_drawdown_pct: 0.05         # 5% from high-water mark -> no new entries
+  hard_drawdown_pct: 0.10         # 10% from high-water mark -> flatten and halt
+  recovery_factor: 0.8            # RECOVERY_FACTOR hysteresis
+  max_concurrent_positions: 6
+  max_positions_per_underlying: 1
+  max_equity_beta_positions: 3    # SPY + QQQ + IWM combined
+  min_free_cash_pct: 0.20         # keep 20% of equity uncommitted
+  max_daily_new_positions: 4
+
+correlation_clusters:
+  equity_beta: [SPY, QQQ, IWM]
+  metals:      [GLD]
+  duration:    [TLT]
+  energy:      [XLE]
+  credit:      [HYG]
+
+execution:
+  ladder_steps: 3                 # ladder_steps
+  ladder_step_pct: 0.10           # ladder_step_pct, of mid, per step
+  ladder_wait_seconds: 30         # ladder_wait_seconds, per rung
+
+trading_window:
+  open: "10:00"                   # ET, no entries before this
+  close: "15:30"                  # ET, no entries after this
+
+cadences:
+  risk_monitor_s: 60
+  manage_positions_s: 300
+  iv_snapshot_s: 900
+  entry_scan_s: 900
+  regime_refresh_s: 1800
+  equity_snapshot_s: 900
+
+llm:
+  # Model IDs are unconfirmed -- see OPEN_QUESTIONS.md Q-004. Do not hardcode
+  # a model string here; config.py fails loudly until these are filled in.
+  tiers:
+    fast: null       # regime labeling
+    reasoning: null   # structure construction
+  max_retries: 1
+  temperature: 0.2
+  regime_max_tokens: 400
+  strategy_max_tokens: 800
+  timeout_s: 30
