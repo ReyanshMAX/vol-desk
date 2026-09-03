@@ -138,6 +138,49 @@ def test_iron_condor_requires_all_four_legs(db_conn):
     assert len(intent.legs) == 4
 
 
+def test_put_credit_spread_with_reversed_sides_rejected(db_conn):
+    # side/strike mapping swapped: sells the LOWER put and buys the HIGHER
+    # put, which is not what "put_credit_spread" means per docs/STRATEGY.md
+    # (sell higher-strike put, buy lower-strike put). Must be rejected
+    # explicitly, not merely happen to fail on arithmetic.
+    short = _snap(f"SPY{EXP:%y%m%d}P00440000", "P", 440.0, 1.25, 1.35, -0.16)
+    long = _snap(f"SPY{EXP:%y%m%d}P00435000", "P", 435.0, 0.19, 0.21, -0.06)
+    chain = {short.occ_symbol: short, long.occ_symbol: long}
+    resp = FakeResponse("trade", StructureType.PUT_CREDIT_SPREAD,
+                         [FakeLeg(short.occ_symbol, "buy"), FakeLeg(long.occ_symbol, "sell")])
+    s, r = _signal_and_regime()
+    assert validate_response(resp, chain, [StructureType.PUT_CREDIT_SPREAD], "SPY", s, r) is None
+
+
+def test_put_debit_spread_with_reversed_sides_rejected(db_conn):
+    # put_debit_spread means buy higher-strike put, sell lower-strike put;
+    # this response inverts that mapping
+    higher = _snap(f"SPY{EXP:%y%m%d}P00440000", "P", 440.0, 2.20, 2.30, -0.45)
+    lower = _snap(f"SPY{EXP:%y%m%d}P00437000", "P", 437.0, 1.20, 1.30, -0.30)
+    chain = {higher.occ_symbol: higher, lower.occ_symbol: lower}
+    resp = FakeResponse("trade", StructureType.PUT_DEBIT_SPREAD,
+                         [FakeLeg(higher.occ_symbol, "sell"), FakeLeg(lower.occ_symbol, "buy")])
+    s, r = _signal_and_regime()
+    assert validate_response(resp, chain, [StructureType.PUT_DEBIT_SPREAD], "SPY", s, r) is None
+
+
+def test_valid_put_debit_spread_accepted(db_conn):
+    higher = _snap(f"SPY{EXP:%y%m%d}P00440000", "P", 440.0, 2.20, 2.30, -0.45)
+    lower = _snap(f"SPY{EXP:%y%m%d}P00437000", "P", 437.0, 1.20, 1.30, -0.30)
+    chain = {higher.occ_symbol: higher, lower.occ_symbol: lower}
+    resp = FakeResponse("trade", StructureType.PUT_DEBIT_SPREAD,
+                         [FakeLeg(higher.occ_symbol, "buy"), FakeLeg(lower.occ_symbol, "sell")])
+    s, r = _signal_and_regime()
+    intent = validate_response(resp, chain, [StructureType.PUT_DEBIT_SPREAD], "SPY", s, r)
+    assert intent is not None
+    # net_credit is negative for a debit structure (D-014 sign convention)
+    assert intent.net_credit < 0
+    debit = -intent.net_credit
+    width = 3.0
+    assert debit / width <= 0.45 + 1e-9
+    assert intent.max_loss_per_contract == pytest.approx(debit * 100, abs=0.01)
+
+
 def test_iron_condor_missing_a_leg_rejected(db_conn):
     put_short = _snap(f"SPY{EXP:%y%m%d}P00440000", "P", 440.0, 1.10, 1.20, -0.16)
     put_long = _snap(f"SPY{EXP:%y%m%d}P00435000", "P", 435.0, 0.20, 0.30, -0.06)

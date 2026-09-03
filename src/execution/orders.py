@@ -3,7 +3,6 @@ management (docs/STRATEGY.md, docs/INTEGRATIONS.md). No LLM.
 """
 from __future__ import annotations
 
-import hashlib
 import logging
 import time
 from dataclasses import dataclass
@@ -26,11 +25,6 @@ class FillResult:
     filled_qty: int
     fill_price: float | None   # per contract, same sign convention as net_credit
     order_id: str | None
-
-
-def _position_key(occ_symbols: list[str]) -> str:
-    joined = "|".join(sorted(occ_symbols))
-    return hashlib.sha1(joined.encode()).hexdigest()
 
 
 def _mcp_legs(legs: list, reverse_sides: bool = False) -> list[mcp_client.Leg]:
@@ -68,7 +62,15 @@ def _run_ladder(mcp_legs: list[mcp_client.Leg], qty: int, base_price: float,
 
         if status == "filled":
             return FillResult("FILLED", qty, avg_price if avg_price is not None else limit, order_id)
-        if status == "partially_filled" and rung == steps - 1:
+        if status == "partially_filled":
+            # Terminal at any rung, not just the last one: the next rung
+            # would otherwise resubmit the ORIGINAL qty against a position
+            # that already has some fill, risking an over-fill. Docs/
+            # INTEGRATIONS.md's ladder outcomes (Filled/Partial/Unfilled)
+            # are evaluated per rung; only "unfilled" is scoped to "after
+            # the final rung" specifically -- a partial stops the ladder
+            # immediately, matching CLAUDE.md rule 5 (never widen to chase
+            # a fill, which includes never re-submitting on top of one).
             mcp_client.cancel_order(order_id)
             return FillResult("PARTIAL", int(filled_qty or 0), avg_price, order_id)
 
@@ -118,7 +120,7 @@ def build_position_row(intent: OrderIntent, qty: int, fill_price: float) -> Posi
 
     return Position(
         id=0,
-        position_key=_position_key([l.occ_symbol for l in intent.legs]),
+        position_key=repo.position_key([l.occ_symbol for l in intent.legs]),
         underlying=intent.symbol,
         structure=intent.structure.value,
         legs=legs,
@@ -173,7 +175,27 @@ def close_structure(p: Position, reason: str) -> FillResult:
         else:
             entry_debit = -p.entry_credit
             realized_pnl = (close_price - entry_debit) * 100 * result.filled_qty
-        repo.close_position(p.position_key, reason, realized_pnl)
+
+        remaining_qty = p.qty - result.filled_qty
+        if result.status == "FILLED" or remaining_qty <= 0:
+            repo.close_position(p.position_key, reason, realized_pnl)
+        else:
+            # Partial close: the schema (docs/DATA.md) has one realized_pnl
+            # field per row, sized for a single terminal close -- it cannot
+            # represent "N of qty contracts closed, M still open." Keep the
+            # row open with the remaining qty (still managed normally next
+            # cycle) and record the partial fill's P&L in decision_log only,
+            # which is the documented fallback for state the current-state
+            # tables don't capture (D-014).
+            repo.upsert_position(Position(**{**p.__dict__, "qty": remaining_qty}))
+            repo.log_decision(
+                agent="manager", action="partial_close",
+                inputs={"position_key": p.position_key, "reason": reason,
+                        "original_qty": p.qty},
+                output={"filled_qty": result.filled_qty, "remaining_qty": remaining_qty,
+                        "realized_pnl_on_filled": realized_pnl, "close_price": close_price},
+                underlying=p.underlying, accepted=True, veto_reason=None,
+            )
     else:
         repo.log_decision(
             agent="manager", action="close_structure",

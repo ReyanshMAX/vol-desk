@@ -141,7 +141,23 @@ class MCPSession:
             raise MCPToolsUnresolvedError(
                 f"capability {capability!r} has no resolved MCP tool name; see Q-001"
             )
-        return self._loop.run(self._call(tool_name, arguments))
+        try:
+            return self._loop.run(self._call(tool_name, arguments))
+        except Exception:
+            # docs/INTEGRATIONS.md: "If the transport dies, reconnect rather
+            # than restarting the process." One reconnect-and-retry; if that
+            # also fails, propagate -- the caller (a scheduled job) already
+            # catches and logs per-job, so a still-dead transport degrades
+            # that job for one cycle rather than crashing the process.
+            logger.warning("MCP call %s failed, attempting one reconnect", capability)
+            # best-effort: does not explicitly tear down the old stdio
+            # transport first (it is presumed already dead), so this may
+            # leak a defunct subprocess handle rather than doing a clean
+            # __aexit__ -- acceptable for a rare failure path, not reused
+            # across repeated failures in a tight loop
+            self.connect()
+            self.assert_required_tools()
+            return self._loop.run(self._call(tool_name, arguments))
 
     async def _call(self, tool_name: str, arguments: dict[str, Any]) -> Any:
         assert self._session is not None

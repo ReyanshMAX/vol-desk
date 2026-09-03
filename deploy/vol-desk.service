@@ -1,0 +1,23 @@
+[Unit]
+Description=vol-desk autonomous options trading agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=voldesk
+WorkingDirectory=/home/voldesk/vol-desk
+EnvironmentFile=/etc/vol-desk.env
+ExecStart=/home/voldesk/vol-desk/.venv/bin/python -m src.main
+Restart=always
+RestartSec=15
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=vol-desk
+
+# a crash loop must not hammer Alpaca or Groq
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Install]
+WantedBy=multi-user.target

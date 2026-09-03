@@ -121,10 +121,16 @@ def construct(symbol: str, signals: SignalSet, regime: RegimeVerdict,
 
     from src.llm.schemas import StrategyResponse  # local import, avoids a cycle
 
+    # complete_json_meta's single-retry contract (docs/INTEGRATIONS.md)
+    # applies here same as regime -- it covers malformed/schema-invalid
+    # JSON. PROMPTS.md's "No retry" rule is specifically about the
+    # deterministic post-validation below (validate_response): once the
+    # response parses, a structurally invalid *selection* is discarded
+    # outright, never retried.
     result = llm_client.complete_json_meta(
         system, user, StrategyResponse, tier="reasoning",
         max_tokens=cfg.llm_strategy_max_tokens, temperature=cfg.llm_temperature,
-        timeout_s=cfg.llm_timeout_s, max_retries=0,  # PROMPTS.md: no retry on invalid selection
+        timeout_s=cfg.llm_timeout_s, max_retries=cfg.llm_max_retries,
     )
 
     intent: OrderIntent | None = None
@@ -172,6 +178,8 @@ def validate_response(r, chain_by_symbol: dict[str, OptionSnapshot],
     if not _sides_balanced(r.legs, contracts, r.structure):
         return None
     if not _strikes_ordered(contracts, r.structure):
+        return None
+    if not _sides_match_strikes(r.legs, contracts, r.structure):
         return None
 
     net = _net_price_from_chain(r.legs, contracts)
@@ -248,6 +256,48 @@ def _strikes_ordered(contracts: list[OptionSnapshot], structure: StructureType) 
         if len(puts) != 2 or len(calls) != 2:
             return False
         return puts[0].strike < puts[1].strike <= calls[0].strike < calls[1].strike
+    return False
+
+
+def _sides_match_strikes(legs, contracts: list[OptionSnapshot], structure: StructureType) -> bool:
+    """_sides_balanced only checks that a buy and a sell are present;
+    _strikes_ordered only checks two distinct strikes exist. Neither catches
+    a model naming the correct structure but swapping which strike is
+    bought vs. sold (e.g. selling the LOWER put and buying the HIGHER put
+    under 'put_credit_spread', which docs/STRATEGY.md's own definition
+    rules out). Reversed sides on a nominal credit structure force a
+    negative net that MIN_CREDIT_TO_WIDTH already rejects, and on a nominal
+    debit structure force a negative max_loss that risk.evaluate's
+    'sizeable' check already vetoes -- but both are safety nets, not a
+    correctness check of the structure definition itself. Enforce it
+    directly here instead of relying on those side effects."""
+    by_symbol = {leg.occ_symbol: leg for leg in legs}
+
+    def strikes_for(right: str) -> list[OptionSnapshot]:
+        return sorted((c for c in contracts if c.right == right), key=lambda c: c.strike)
+
+    def vertical_ok(pair: list[OptionSnapshot], low_side: str, high_side: str) -> bool:
+        if len(pair) != 2:
+            return False
+        low, high = pair
+        return (by_symbol[low.occ_symbol].side == low_side
+                and by_symbol[high.occ_symbol].side == high_side)
+
+    if structure == StructureType.PUT_CREDIT_SPREAD:
+        # sell higher-strike put, buy lower-strike put
+        return vertical_ok(strikes_for("P"), low_side="buy", high_side="sell")
+    if structure == StructureType.CALL_CREDIT_SPREAD:
+        # sell lower-strike call, buy higher-strike call
+        return vertical_ok(strikes_for("C"), low_side="sell", high_side="buy")
+    if structure == StructureType.PUT_DEBIT_SPREAD:
+        # buy higher-strike put, sell lower-strike put
+        return vertical_ok(strikes_for("P"), low_side="sell", high_side="buy")
+    if structure == StructureType.CALL_DEBIT_SPREAD:
+        # buy lower-strike call, sell higher-strike call
+        return vertical_ok(strikes_for("C"), low_side="buy", high_side="sell")
+    if structure == StructureType.IRON_CONDOR:
+        return (vertical_ok(strikes_for("P"), low_side="buy", high_side="sell")
+                and vertical_ok(strikes_for("C"), low_side="sell", high_side="buy"))
     return False
 
 

@@ -3,12 +3,22 @@ this module -- no other module opens a cursor directly.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from src.store import db
+
+
+def position_key(occ_symbols: list[str]) -> str:
+    """sha1 of sorted OCC symbols joined by '|' (docs/DATA.md). The single
+    definition -- orders.py and reconcile.py both need it to agree exactly
+    for reconciliation matching to work, so it lives here rather than being
+    reimplemented in each."""
+    joined = "|".join(sorted(occ_symbols))
+    return hashlib.sha1(joined.encode()).hexdigest()
 
 
 @dataclass(frozen=True)

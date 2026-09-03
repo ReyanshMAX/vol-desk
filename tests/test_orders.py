@@ -5,8 +5,8 @@ import pytest
 from src.agents.regime import RegimeLabel
 from src.agents.strategy import Leg, OrderIntent, StructureType
 from src.data.alpaca_data import OptionSnapshot
-from src.execution.orders import _mark_to_market, _position_key, build_position_row
-from src.store.repo import Leg as PositionLeg
+from src.execution.orders import _mark_to_market, build_position_row
+from src.store.repo import Leg as PositionLeg, position_key as _position_key
 
 EXP = date.today() + timedelta(days=10)
 

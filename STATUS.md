@@ -47,11 +47,18 @@ Alpaca or Groq calls made:_
   boot-time reconciliation (MATCHED/ORPHAN/GHOST/IN_FLIGHT)
 - `src/main.py` — full boot sequence (steps 1-6) and all six scheduled jobs
   wired into the entry pipeline from docs/ARCHITECTURE.md
-- `tests/` — 58 passing unit tests covering the deterministic layer: BS
-  inversion round-trip, OCC symbol construction, signal math, mechanical
-  regime labeling, risk sizing/veto checks, strategy post-validation
-  (credit-to-width, delta bands, liquidity, iron-condor leg completeness),
-  position-management threshold math, config loading
+- `tests/` — 69 passing tests: unit coverage for the deterministic layer
+  (BS inversion round-trip, OCC symbol construction, signal math, mechanical
+  regime labeling, risk sizing/veto checks, strategy post-validation,
+  position-management threshold math, config loading, reconciliation
+  grouping/orphan-adoption/ghost-closing), plus a mocked end-to-end
+  `entry_scan` pipeline test (`tests/test_pipeline_e2e.py`) that runs real
+  signal→regime→strategy→risk→orders code with only the Alpaca/Groq network
+  boundaries faked -- this caught two real bugs before they'd have hit a
+  live account (see Deviations)
+- `deploy/` — `provision.sh`, `vol-desk.service`, `vol-desk.env.example`:
+  the docs/DEPLOY.md commands as ready-to-run files, not yet run against a
+  real VM
 
 ## In progress
 
@@ -86,6 +93,39 @@ which are available in this session._
 - **Q-005** host not yet provisioned — nothing in this session had VM access
 
 ## Deviations from spec
+
+- **Bugs found and fixed during a self-review pass, before any of this ran
+  against a live account:**
+  - `strategy.py` validated that a response's legs balanced (one buy, one
+    sell) and that two distinct strikes existed, but not that the *correct*
+    strike was on the *correct* side (e.g. a `put_credit_spread` response
+    could have sold the lower strike and bought the higher one, which is
+    the wrong construction per docs/STRATEGY.md's own definition). This
+    happened to be caught downstream by the credit/debit-to-width and
+    sizing checks as a side effect, but not as an explicit correctness
+    check. Added `_sides_match_strikes` to reject it directly.
+  - `orders.py`'s `submit_with_ladder` only treated a partially-filled rung
+    as terminal on the *last* ladder rung; on an earlier rung it would
+    cancel and resubmit the *original* full quantity on the next rung,
+    risking an over-fill on top of the partial. Now any partial fill is
+    terminal at whichever rung it occurs.
+  - `orders.py`'s `close_structure` always marked a position fully
+    `state='closed'` even on a partial close, silently losing track of the
+    contracts still open at the broker. It now keeps the row `state='open'`
+    with the reduced remaining qty and records the partial fill's P&L in
+    `decision_log` (the schema has one `realized_pnl` field per row, sized
+    for a single terminal close, not partial accounting).
+  - `strategy.py`'s LLM call used `max_retries=0`, conflating PROMPTS.md's
+    "no retry" rule (which is about the deterministic *post-validation*
+    step) with the JSON-schema-level retry contract from INTEGRATIONS.md,
+    which should apply uniformly to both LLM call sites. Fixed to use the
+    configured retry count.
+  - `_position_key` was duplicated identically in `orders.py` and
+    `reconcile.py`; consolidated into `store/repo.py` so the two can't
+    silently drift apart.
+  - `mcp_client.py` had no reconnect path for a transport dying mid-session
+    (INTEGRATIONS.md: "reconnect rather than restarting the process"); a
+    failed call now attempts one reconnect-and-retry before propagating.
 
 - `mcp_client.py`'s IN_FLIGHT resolution in `reconcile.py` is coarser than
   docs/ARCHITECTURE.md implies: the schema (docs/DATA.md) has no `order_id`

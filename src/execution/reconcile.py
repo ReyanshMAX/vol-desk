@@ -4,7 +4,6 @@ state and rebuilds its picture from Alpaca + SQLite.
 """
 from __future__ import annotations
 
-import hashlib
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -28,11 +27,6 @@ class ReconcileReport:
     in_flight_resolved: list[str] = field(default_factory=list)
 
 
-def _position_key(occ_symbols: list[str]) -> str:
-    joined = "|".join(sorted(occ_symbols))
-    return hashlib.sha1(joined.encode()).hexdigest()
-
-
 def _group_broker_positions() -> dict[str, list]:
     """Group Alpaca option legs by (underlying, expiration) -> position_key."""
     groups: dict[tuple[str, str], list] = {}
@@ -45,7 +39,7 @@ def _group_broker_positions() -> dict[str, list]:
     by_position_key: dict[str, list] = {}
     for (root, expiry_iso), legs in groups.items():
         occ_symbols = [bp.occ_symbol for bp, _, _ in legs]
-        pk = _position_key(occ_symbols)
+        pk = repo.position_key(occ_symbols)
         by_position_key[pk] = legs
     return by_position_key
 

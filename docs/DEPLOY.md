@@ -7,6 +7,13 @@ Linux VM. Nothing in the architecture depends on the host (D-011) — this docum
 is the only place a host is named, and swapping providers changes provisioning
 commands and nothing else.
 
+The commands and files below are also captured as ready-to-run artifacts under
+`deploy/`: `provision.sh` (the provisioning steps, idempotent-ish), `vol-desk.service`
+(the systemd unit verbatim), and `vol-desk.env.example` (the environment file
+template). Running `provision.sh` gets a fresh VM to "service installed and
+enabled" — it does not start the service, since that still needs Q-001/Q-003/Q-004
+resolved and the env file filled in first.
+
 ## Non-goals
 
 - No containers. A single Python process with a virtualenv on a micro instance does not benefit from Docker, and the image pull is a real cost on a constrained free-tier disk.
