@@ -43,6 +43,12 @@ _NON_CHAT_PATTERNS = ("whisper", "tts", "guard", "moderation", "prompt-guard")
 
 
 def _get(url: str, headers: dict) -> dict:
+    # Groq's API sits behind Cloudflare, which blocks Python urllib's
+    # default User-Agent ("Python-urllib/3.x") as a bot signature (HTTP 403,
+    # "error code: 1010") before the request ever reaches Groq's own auth
+    # check. A normal-looking UA avoids that; explicit here rather than
+    # left to urllib's default for exactly that reason.
+    headers = {**headers, "User-Agent": "vol-desk/1.0 (+https://github.com/ReyanshMAX/vol-desk)"}
     req = urllib.request.Request(url, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
