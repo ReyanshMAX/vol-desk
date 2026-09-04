@@ -23,6 +23,7 @@ export default function RootLayout({
               <nav className="nav">
                 <a href="/">Dashboard</a>
                 <a href="/how-it-works">How it works</a>
+                <a href="/deck">Slide Deck</a>
               </nav>
               <span className="paper-badge">PAPER TRADING</span>
             </div>
