@@ -14,14 +14,19 @@ from src.execution import mcp_client
 def _envelope(result) -> SimpleNamespace:
     """Build a fake MCP CallToolResult matching the real
     alpacahq/alpaca-mcp-server's security-envelope wire format, confirmed
-    live 2026-09-03 against get_all_positions:
-        {"_alpaca_mcp_security": {...}, "data": {"result": <result>}}
-    _unwrap() must peel this off; earlier tests in this file stubbed
-    already-unwrapped plain values directly, which let a real bug in
-    _unwrap ship unnoticed until it hit a live server."""
+    live 2026-09-03 against both get_all_positions and get_account_info:
+    an object payload sits directly under "data" ({"data": {"equity": ...}}),
+    but an array payload sits one level deeper under "result"
+    ({"data": {"result": [...]}}) -- mirrored here exactly since both
+    shapes are independently confirmed live, not just inferred from the
+    code under test. _unwrap() must peel both; earlier tests in this file
+    stubbed already-unwrapped plain values directly, which is how the
+    original envelope bug (and this array-vs-object variant of it)
+    shipped unnoticed until it hit a live server."""
+    data_field = {"result": result} if isinstance(result, list) else result
     text = json.dumps({
         "_alpaca_mcp_security": {"trust": "untrusted_tool_output"},
-        "data": {"result": result},
+        "data": data_field,
     })
     return SimpleNamespace(content=[SimpleNamespace(text=text)])
 

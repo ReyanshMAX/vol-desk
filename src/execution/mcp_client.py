@@ -325,25 +325,31 @@ def close_position(occ_symbol: str) -> str:
 
 def _unwrap(mcp_result: Any) -> Any:
     """MCP tool results carry a content list whose text is JSON. Confirmed
-    live 2026-09-03 (get_all_positions): the real alpacahq/alpaca-mcp-server
-    wraps every tool's actual return value in a security envelope --
+    live 2026-09-03: the real alpacahq/alpaca-mcp-server wraps every tool's
+    actual return value in a security envelope --
 
         {"_alpaca_mcp_security": {"trust": "untrusted_tool_output", ...},
-         "data": {"result": <the actual Alpaca REST payload>}}
+         "data": <the actual Alpaca REST payload>}
 
     -- a deliberate guard against prompt injection via API data (the
     envelope's own "instructions" field tells the calling model not to
-    follow anything embedded in the data). Peel that off here so nothing
-    above this function ever has to know it exists. Falls back to the raw
-    parsed value if a response doesn't match the envelope shape, rather
-    than assuming every tool wraps identically."""
+    follow anything embedded in the data). The "data" field holds an
+    object payload (e.g. get_account_info) directly, but an array payload
+    (e.g. get_all_positions) one level deeper under "result" -- confirmed
+    against both live: {"data": {"equity": ...}} for the former,
+    {"data": {"result": [...]}} for the latter. Peel both cases off here
+    so nothing above this function ever has to know either shape exists.
+    Falls back to the raw parsed value if a response doesn't match the
+    envelope shape at all, rather than assuming every tool wraps
+    identically."""
     if hasattr(mcp_result, "content"):
         import json
         text = mcp_result.content[0].text
         parsed = json.loads(text)
-        if isinstance(parsed, dict):
-            data_field = parsed.get("data")
+        if isinstance(parsed, dict) and "data" in parsed:
+            data_field = parsed["data"]
             if isinstance(data_field, dict) and "result" in data_field:
                 return data_field["result"]
+            return data_field
         return parsed
     return mcp_result
