@@ -3,9 +3,27 @@ the real alpacahq/alpaca-mcp-server tool schema (see mcp_client.py's
 module docstring for the source). No live server -- MCPSession.call is
 stubbed to capture what would be sent and return a canned response.
 """
+import json
+from types import SimpleNamespace
+
 import pytest
 
 from src.execution import mcp_client
+
+
+def _envelope(result) -> SimpleNamespace:
+    """Build a fake MCP CallToolResult matching the real
+    alpacahq/alpaca-mcp-server's security-envelope wire format, confirmed
+    live 2026-09-03 against get_all_positions:
+        {"_alpaca_mcp_security": {...}, "data": {"result": <result>}}
+    _unwrap() must peel this off; earlier tests in this file stubbed
+    already-unwrapped plain values directly, which let a real bug in
+    _unwrap ship unnoticed until it hit a live server."""
+    text = json.dumps({
+        "_alpaca_mcp_security": {"trust": "untrusted_tool_output"},
+        "data": {"result": result},
+    })
+    return SimpleNamespace(content=[SimpleNamespace(text=text)])
 
 
 class _StubSession:
@@ -135,3 +153,46 @@ def test_cancel_order_uses_order_id_param(stub_session):
     capability, args = stub_session.calls[0]
     assert capability == "cancel_order"
     assert args == {"order_id": "order-1"}
+
+
+# --- _unwrap: the real security-envelope wire format --------------------
+
+def test_unwrap_peels_security_envelope_for_list_result():
+    assert mcp_client._unwrap(_envelope([])) == []
+    positions = [{"symbol": "SPY260918P00440000", "qty": "1"}]
+    assert mcp_client._unwrap(_envelope(positions)) == positions
+
+
+def test_unwrap_peels_security_envelope_for_object_result():
+    assert mcp_client._unwrap(_envelope({"id": "order-1"})) == {"id": "order-1"}
+
+
+def test_unwrap_falls_back_when_no_envelope_present():
+    # a bare dict with no data.result wrapper -- must not crash, must not
+    # be mistaken for an enveloped response
+    raw = SimpleNamespace(content=[SimpleNamespace(text=json.dumps({"equity": "100000.00"}))])
+    assert mcp_client._unwrap(raw) == {"equity": "100000.00"}
+
+
+def test_get_positions_end_to_end_through_the_real_envelope_shape(stub_session):
+    """Regression test for the exact bug hit on the first live run: with
+    zero positions, the real server returns the envelope wrapping an empty
+    list, not a bare []. get_positions() must return [] cleanly rather
+    than raising while iterating over an unwrapped envelope dict."""
+    stub_session.next_result = _envelope([])
+    assert mcp_client.get_positions() == []
+
+    stub_session.next_result = _envelope([
+        {"symbol": "SPY260918P00440000", "qty": "2", "side": "short",
+         "avg_entry_price": "1.10", "market_value": "-150.0", "unrealized_pl": "50.0"},
+    ])
+    positions = mcp_client.get_positions()
+    assert len(positions) == 1
+    assert positions[0].qty == -2
+
+
+def test_get_account_end_to_end_through_the_real_envelope_shape(stub_session):
+    stub_session.next_result = _envelope({"equity": "100000.00", "cash": "80000.00",
+                                           "buying_power": "100000.00"})
+    account = mcp_client.get_account()
+    assert account.equity == 100_000.0
