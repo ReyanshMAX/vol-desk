@@ -3,9 +3,18 @@
 ## Overview
 
 The system runs as a single systemd-managed Python process on a generic always-on
-Linux VM. Nothing in the architecture depends on the host (D-011) — this document
-is the only place a host is named, and swapping providers changes provisioning
-commands and nothing else.
+Linux VM. Nothing in the architecture depends on the host (D-029, formerly D-011)
+— this document is the only place a host is named, and swapping providers changes
+provisioning commands and nothing else.
+
+**Current host (D-029):** a personal Windows machine via WSL2, run in the
+foreground around market hours rather than as an always-on systemd daemon — see
+"WSL2 (personal machine)" below. D-011's always-on-VM plan required a card for
+identity verification on every free-tier provider checked (GCP, Oracle, Fly.io);
+none was available, and the remaining "no card" VPS options weren't trustworthy
+enough to hold live trading credentials. The systemd/VM path below is kept as the
+target architecture and remains fully valid if a card becomes available later —
+nothing about the application changes, only how it's launched and supervised.
 
 The commands and files below are also captured as ready-to-run artifacts under
 `deploy/`: `provision.sh` (the provisioning steps, idempotent-ish), `vol-desk.service`
@@ -35,6 +44,47 @@ small SQLite writes.
 
 Pick whichever provisions successfully and record it in STATUS.md. Do not
 re-architect for either.
+
+## WSL2 (personal machine)
+
+D-029's actual current host: no dedicated VM, no systemd. The process runs in
+the foreground inside WSL2 (Ubuntu) on a Windows machine, started before market
+open and stopped after close. This trades unattended operation for zero cost and
+zero card requirement — see D-029's stated tradeoff: an open position goes
+unmanaged (no take-profit/stop/halt) for however long the machine is off.
+Restarting is still safe (D-013: `reconcile.run()` rebuilds state from Alpaca +
+SQLite on every boot), it's just not continuous.
+
+```powershell
+# in an elevated (Administrator) PowerShell, one-time setup
+wsl --install -d Ubuntu
+# reboot if prompted, then open the new "Ubuntu" app from the Start menu
+```
+
+Inside the Ubuntu WSL shell, one-time setup:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y python3.11 python3.11-venv python3-pip git sqlite3
+curl -LsSf https://astral.sh/uv/install.sh | sh   # for `uvx alpaca-mcp-server`
+
+git clone https://github.com/ReyanshMAX/vol-desk ~/vol-desk
+cd ~/vol-desk
+cp deploy/vol-desk.env.example .env
+nano .env   # fill in ALPACA_API_KEY, ALPACA_SECRET_KEY, GROQ_API_KEY
+```
+
+Each trading day, before market open:
+
+```bash
+cd ~/vol-desk && bash deploy/run_local.sh
+```
+
+`run_local.sh` creates the venv on first run, installs dependencies, sources
+`.env`, and runs `python -m src.main` in the foreground — `Ctrl-C` to stop after
+close. `.env` is gitignored; it is never committed (see CLAUDE.md's git safety
+notes — a `.env` was accidentally committed and pushed once during this build
+and had to be rotated and purged from history; don't repeat that).
 
 ## Provisioning
 
