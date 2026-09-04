@@ -34,7 +34,8 @@ around:
 
 | Purpose | Endpoint | Notes |
 |---|---|---|
-| Underlying daily bars | `GET /v2/stocks/bars` | 1 year lookback, `timeframe=1Day`, `adjustment=split` |
+| Underlying daily bars | `GET /v2/stocks/bars` | 1 year lookback, `timeframe=1Day`, `adjustment=split`, `feed=iex` (D-030 — a free/paper account can't query recent SIP data) |
+| Underlying latest trade | `GET /v2/stocks/{symbol}/trades/latest` | `feed=iex`, same reason (D-030) |
 | Option chain snapshot | `GET /v1beta1/options/snapshots/{underlying}` | `feed=indicative`; returns latest quote, greeks, IV per contract |
 | Historical option bars | `GET /v1beta1/options/bars` | takes a list of OCC symbols + date range; **data begins Feb 2024** |
 | Contract metadata / OI | `GET /v2/options/contracts` | one call per contract, open interest lags one day |

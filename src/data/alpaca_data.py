@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Literal
 
+from alpaca.data.enums import DataFeed, OptionsFeed
 from alpaca.data.historical.option import OptionHistoricalDataClient
 from alpaca.data.historical.stock import StockHistoricalDataClient
 from alpaca.data.requests import (
@@ -64,7 +65,12 @@ def _clients() -> tuple[StockHistoricalDataClient, OptionHistoricalDataClient, T
 
 
 def fetch_daily_bars(symbol: str, days: int) -> list[Bar]:
-    """GET /v2/stocks/bars, timeframe=1Day, adjustment=split, `days` lookback."""
+    """GET /v2/stocks/bars, timeframe=1Day, adjustment=split, `days` lookback.
+
+    feed=DataFeed.IEX explicitly: alpaca-py's default (SIP) requires a paid
+    subscription for recent data and 403s with "subscription does not
+    permit querying recent SIP data" on a free/paper account -- confirmed
+    live 2026-09-03. IEX is the free-tier feed."""
     stock, _, _ = _clients()
     end = datetime.utcnow()
     start = end - timedelta(days=days * 2)  # pad for weekends/holidays
@@ -74,6 +80,7 @@ def fetch_daily_bars(symbol: str, days: int) -> list[Bar]:
         start=start,
         end=end,
         adjustment="split",
+        feed=DataFeed.IEX,
     )
     bar_set = stock.get_stock_bars(req)
     bars = [
@@ -86,9 +93,10 @@ def fetch_daily_bars(symbol: str, days: int) -> list[Bar]:
 
 def fetch_latest_price(symbol: str) -> float:
     """Latest trade price for the underlying. Equity trades are not subject
-    to the options feed's 15-minute delay (docs/DATA.md)."""
+    to the options feed's 15-minute delay (docs/DATA.md). feed=DataFeed.IEX
+    for the same reason as fetch_daily_bars -- SIP needs a paid subscription."""
     stock, _, _ = _clients()
-    req = StockLatestTradeRequest(symbol_or_symbols=symbol)
+    req = StockLatestTradeRequest(symbol_or_symbols=symbol, feed=DataFeed.IEX)
     trades = stock.get_stock_latest_trade(req)
     return float(trades[symbol].price)
 
@@ -112,7 +120,7 @@ def fetch_chain(symbol: str, underlying_price: float, *,
 
     req = OptionChainRequest(
         underlying_symbol=symbol,
-        feed="indicative",
+        feed=OptionsFeed.INDICATIVE,
         expiration_date_gte=expiry_gte,
         expiration_date_lte=expiry_lte,
         strike_price_gte=strike_low,
