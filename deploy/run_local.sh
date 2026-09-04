@@ -48,6 +48,13 @@ if [ ! -f .env ]; then
 fi
 
 echo "== starting vol-desk (Ctrl-C to stop) =="
+# Belt-and-suspenders: if VOL_DESK_DB/VOL_DESK_CONFIG got exported into
+# the calling shell by an earlier `source .env` from before either was
+# removed from .env, `source .env` below won't un-export them --
+# sourcing only sets what's present in the file, it doesn't clear what's
+# absent. Explicitly clear both first so config.py's own (correct)
+# relative defaults always win unless this .env sets them on purpose.
+unset VOL_DESK_DB VOL_DESK_CONFIG
 set -a
 source .env
 set +a
