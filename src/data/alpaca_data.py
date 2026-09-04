@@ -163,7 +163,7 @@ def fetch_option_bars(occ_symbols: list[str], on: date) -> dict[str, float]:
     start = datetime(on.year, on.month, on.day)
     end = start + timedelta(days=1)
     req = OptionBarsRequest(symbol_or_symbols=occ_symbols, start=start, end=end,
-                             timeframe=TimeFrame.Day)
+                             timeframe=TimeFrame.Day, feed=OptionsFeed.INDICATIVE)
     bar_set = option.get_option_bars(req)
     out: dict[str, float] = {}
     for sym in occ_symbols:
