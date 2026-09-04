@@ -1,5 +1,10 @@
 """One-off diagnostic: print the raw MCP response for get_all_positions so
 we can see its actual shape rather than guess. Delete after use."""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 from src.execution import mcp_client
 
 session = mcp_client.connect()
