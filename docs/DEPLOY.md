@@ -72,6 +72,12 @@ git clone https://github.com/ReyanshMAX/vol-desk ~/vol-desk
 cd ~/vol-desk
 cp deploy/vol-desk.env.example .env
 nano .env   # fill in ALPACA_API_KEY, ALPACA_SECRET_KEY, GROQ_API_KEY
+
+# resolves Q-003 (strike increments) and Q-004 (Groq model IDs) against
+# the live APIs and writes them into config/, with a review-and-confirm
+# step before anything is written -- see scripts/resolve_open_questions.py
+set -a; source .env; set +a
+python3 scripts/resolve_open_questions.py
 ```
 
 Each trading day, before market open:
