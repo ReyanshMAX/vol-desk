@@ -1,22 +1,26 @@
 # Status
 
-**Last updated:** 2026-09-03
+**Last updated:** 2026-09-04
 **Current phase:** all 9 phases implemented in code and unit-tested against
-fixtures. Q-001 (MCP tool names/schemas) is now resolved from the vendor's
-own source (D-028) rather than blocking on live access, but nothing has
-actually connected to a live Alpaca MCP server, Groq, or run on a VM yet —
-this session had `.env`-style credentials mentioned but not actually present
-in the container (see "Blocked"). Treat every phase as **code-complete,
-live-unverified**.
-**Next action:** Get real credentials into this session (or a session with
-filesystem access to them) via `ALPACA_API_KEY`/`ALPACA_SECRET_KEY`/
-`GROQ_API_KEY` env vars, install `uv` (`curl -LsSf https://astral.sh/uv/install.sh | sh`),
-set `ALPACA_MCP_COMMAND=uvx alpaca-mcp-server`, and run `python -m src.main`
-locally to exercise Phase 1's boot sequence for real — first likely failure
-point is Q-003 (strike increments, still null in `config/universe.yaml`),
-which blocks `iv.ensure_seeded()` (boot step 5) for every symbol. Q-004
-(Groq model IDs) blocks any real LLM call but not boot itself (D-010
-degrades gracefully). See "Blocked" below.
+fixtures. Q-001 is now genuinely resolved (D-028, updated): with real paper
+credentials, `mcp_client.connect()` was run for real against
+`uvx alpaca-mcp-server` and it worked — 72 tools listed, all six
+`REQUIRED_TOOLS` present. That's the single biggest risk in this build,
+confirmed live. What's still unverified is a real order/account-data round
+trip: this session's own network egress policy blocks outbound access to
+both `paper-api.alpaca.markets` and `api.groq.com` (two separate confirmed
+403s from the sandbox's proxy — not a bug here, see "Blocked"), so
+`get_account_info` couldn't complete. Treat the codebase as
+**schema-confirmed, transaction-unverified**.
+**Next action:** From an environment that can actually reach Alpaca and
+Groq (a real VM per docs/DEPLOY.md, or the user's own machine — not this
+sandboxed remote session), set `ALPACA_API_KEY`/`ALPACA_SECRET_KEY`/
+`GROQ_API_KEY`/`ALPACA_MCP_COMMAND=uvx alpaca-mcp-server` and run
+`python -m src.main` to exercise Phase 1's boot sequence for real. First
+likely failure point after that is Q-003 (strike increments, still null in
+`config/universe.yaml`), which blocks `iv.ensure_seeded()` (boot step 5) for
+every symbol. Q-004 (Groq model IDs) blocks any real LLM call but not boot
+itself (D-010 degrades gracefully). See "Blocked" below.
 
 ---
 
@@ -98,12 +102,17 @@ which are available in this session._
 
 ## Blocked
 
-- **No live credentials in this session.** The user mentioned a local
-  `.env` with Alpaca/Groq keys, but this session runs in an isolated remote
-  container with no access to the user's local filesystem -- nothing was
-  actually available to connect with. Needs env vars set on this session/
-  environment (or run locally with Claude Code CLI) to unblock any live
-  verification below.
+- **This session's network egress policy blocks Alpaca and Groq.** Real
+  (rotated) credentials were provided and `mcp_client.connect()` genuinely
+  worked -- confirmed 72 real tools, all `REQUIRED_TOOLS` present. But the
+  session's own proxy returns a hard 403 on CONNECT to both
+  `paper-api.alpaca.markets:443` and `api.groq.com:443` (confirmed via
+  `curl` and the proxy's own status endpoint -- an organization policy
+  denial, not a bug in this codebase, and not something to retry or route
+  around per this environment's own rules). A real account-data fetch, a
+  real order, and any real LLM call are therefore still unverified from
+  this session specifically. Needs an environment that can actually reach
+  those two hosts -- a real VM (docs/DEPLOY.md) or the user's own machine.
 - **Q-002** does the free chain return IV — code handles both branches
   (`iv.snapshot_iv` falls back to inverting the quote mid), unverified live
 - **Q-003** strike increments per symbol — blocks backfill; `universe.yaml`
@@ -115,14 +124,19 @@ which are available in this session._
 
 ## Deviations from spec
 
-- **Q-001 resolved without a live connection.** OPEN_QUESTIONS.md's own
-  protocol says "ask, then move the answer to DECISIONS.md" -- there was no
-  live server to ask. Instead the vendor's own published source
-  (`alpacahq/alpaca-mcp-server`) was read directly, which is strong
-  evidence (not inference from REST docs, which is what Q-001 explicitly
-  warned against) but is not the same as a live call. Recorded as D-028
-  with that caveat stated explicitly and `assert_required_tools()` left in
-  place as the live check. Treat D-028 as provisional until one small real
+- **Q-001: resolved from source, then confirmed live (partially).**
+  OPEN_QUESTIONS.md's own protocol says "ask, then move the answer to
+  DECISIONS.md." First pass: no live server was reachable, so the vendor's
+  own published source (`alpacahq/alpaca-mcp-server`) was read directly --
+  strong evidence, not inference from REST docs (which is what Q-001
+  explicitly warned against), but not a live call. Second pass, same
+  session: real credentials arrived, and `mcp_client.connect()` actually
+  ran against the real server -- 72 tools listed, all six `REQUIRED_TOOLS`
+  confirmed present. What's still unconfirmed is a real tool *call*
+  completing end-to-end (account fetch, an order): this session's own
+  network policy blocks the destination host, unrelated to the schema
+  work. D-028 records both passes. Treat the schema mapping as confirmed;
+  treat a real transaction as still open until one small real
   order confirms it.
 - **Bugs found and fixed during a self-review pass, before any of this ran
   against a live account:**
