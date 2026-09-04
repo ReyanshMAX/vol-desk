@@ -10,8 +10,32 @@ REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 cd "$REPO_ROOT"
 
 if [ ! -d .venv ]; then
+    echo "== finding a Python >= 3.11 (enum.StrEnum requires it) =="
+    PYBIN=""
+    for candidate in python3.13 python3.12 python3.11 python3; do
+        if command -v "$candidate" >/dev/null 2>&1; then
+            ver=$("$candidate" -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")')
+            major=${ver%%.*}
+            minor=${ver#*.}
+            if [ "$major" -eq 3 ] && [ "$minor" -ge 11 ]; then
+                PYBIN="$candidate"
+                echo "  using $candidate (Python $ver)"
+                break
+            fi
+        fi
+    done
+    if [ -z "$PYBIN" ]; then
+        echo "FATAL: no Python >= 3.11 found. This codebase uses enum.StrEnum," >&2
+        echo "added in 3.11 -- an older interpreter will fail at import time" >&2
+        echo "with a confusing error, not a clear one, so this checks first." >&2
+        echo "Install one, e.g.:" >&2
+        echo "  sudo apt-get install -y python3.11 python3.11-venv" >&2
+        echo "(if that package isn't found, your Ubuntu release may need the" >&2
+        echo " deadsnakes PPA: sudo add-apt-repository ppa:deadsnakes/ppa)" >&2
+        exit 1
+    fi
     echo "== creating venv =="
-    python3.11 -m venv .venv || python3 -m venv .venv
+    "$PYBIN" -m venv .venv
 fi
 
 echo "== installing dependencies =="
