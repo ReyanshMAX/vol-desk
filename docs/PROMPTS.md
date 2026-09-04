@@ -50,6 +50,12 @@ If iv_rank is null the implied-volatility history is insufficient and you are
 working from realized volatility alone. Say so in your rationale and prefer the
 mechanical label unless the evidence is strong.
 
+Return a JSON object with exactly these keys:
+
+  label       one of the seven regime labels above, as a string
+  confidence  a number between 0 and 1
+  rationale   a string, at least 20 characters, explaining your choice
+
 Return only a JSON object. No prose, no markdown fences.
 ```
 
@@ -135,6 +141,17 @@ deltas and prices as approximate.
 
 Position size is not your decision and is determined elsewhere. Do not include
 quantity in your response.
+
+Return a JSON object with exactly these keys:
+
+  decision    "trade" or "decline"
+  structure   one of the permitted structures above if decision is "trade",
+              otherwise null
+  legs        a list of objects, each with "occ_symbol" (string) and "side"
+              ("buy" or "sell"); an empty list if declining
+  expiration  the expiration date you chose, formatted YYYY-MM-DD, or null
+              if declining
+  rationale   a string, at least 20 characters, explaining your choice
 
 Return only a JSON object. No prose, no markdown fences.
 ```

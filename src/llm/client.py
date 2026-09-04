@@ -101,6 +101,7 @@ def complete(
             max_tokens=max_tokens,
             temperature=temperature,
             timeout=timeout_s,
+            extra_body={"reasoning_effort": "low"},
         )
     except (APIError, APITimeoutError, Exception) as e:  # noqa: BLE001 - single boundary
         raise InferenceUnavailable(f"Groq call failed: {e}") from e
