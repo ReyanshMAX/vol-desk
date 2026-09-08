@@ -186,6 +186,20 @@ chain:
 Only contracts inside `STRIKE_RANGE_PCT` of spot for the selected expiration are
 included. A full chain would dominate the context window and degrade selection.
 
+`STRIKE_RANGE_PCT` alone is not sufficient on a dense strike grid: it scales
+with the underlying's price, not its strike spacing, so a $1-increment,
+near-daily-expiration name like SPY still yields 100+ strikes per side even at
+a narrow pct (confirmed live 2026-09-08, overflowing Groq's 8000 TPM -- see
+OPEN_QUESTIONS.md Q-004). `strategy.construct()` additionally caps the table to
+the 25 strikes closest to spot on each side (`_PROMPT_CHAIN_MAX_PER_SIDE`)
+after narrowing to the selected expiration. This is always enough: every
+structure this system trades needs strikes within a five-point wing of a leg
+whose delta sits inside `SHORT_DELTA_BAND` or `DEBIT_LONG_DELTA_BAND`, both
+well within that window on every symbol in the universe. Contracts outside the
+cap are simply invisible to the model for that call, same as contracts outside
+`STRIKE_RANGE_PCT` already were -- `validate_response` never trusts a leg the
+model wasn't shown regardless of which filter excluded it.
+
 ### Response schema
 
 ```python

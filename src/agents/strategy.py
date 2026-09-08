@@ -49,6 +49,27 @@ EXPECTED_LEGS: dict[StructureType, int] = {
 
 _CREDIT_STRUCTURES = {StructureType.PUT_CREDIT_SPREAD, StructureType.CALL_CREDIT_SPREAD, StructureType.IRON_CONDOR}
 
+# STRIKE_RANGE_PCT alone isn't enough to bound prompt size: it scales with
+# the underlying's price, not its strike density. SPY trades $1 increments
+# and near-daily expirations, so even a narrow pct still yields ~100+
+# strikes per side for a single expiration -- confirmed live 2026-09-08,
+# still overflowing Groq's 8000 TPM after strike_range_pct was cut to 0.08
+# (Q-004). Every structure this system trades needs strikes within a
+# five-point wing of a short/long leg whose delta sits inside
+# short_delta_band or debit_long_delta_band -- both comfortably inside the
+# money on any of the seven universe symbols -- so the N strikes closest to
+# spot on each side is always enough, regardless of how dense the grid is.
+_PROMPT_CHAIN_MAX_PER_SIDE = 25
+
+
+def _trim_for_prompt(expiry_chain: list[OptionSnapshot], underlying_price: float) -> list[OptionSnapshot]:
+    def closest(right: str) -> list[OptionSnapshot]:
+        side = [c for c in expiry_chain if c.right == right]
+        side.sort(key=lambda c: abs(c.strike - underlying_price))
+        return side[:_PROMPT_CHAIN_MAX_PER_SIDE]
+
+    return closest("P") + closest("C")
+
 
 @dataclass(frozen=True)
 class Leg:
@@ -102,10 +123,11 @@ def construct(symbol: str, signals: SignalSet, regime: RegimeVerdict,
         return None
     dte = (expiration - date.today()).days
 
+    prompt_chain = _trim_for_prompt(expiry_chain, signals.underlying_price)
     rows = [
         {"occ_symbol": c.occ_symbol, "right": c.right, "strike": c.strike,
          "delta": c.delta, "bid": c.bid or 0.0, "ask": c.ask or 0.0, "iv": c.implied_volatility}
-        for c in sorted(expiry_chain, key=lambda c: (c.right, c.strike))
+        for c in sorted(prompt_chain, key=lambda c: (c.right, c.strike))
     ]
     chain_table = prompts.render_chain_table(rows)
 
