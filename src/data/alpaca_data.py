@@ -128,9 +128,15 @@ def fetch_chain(symbol: str, underlying_price: float, *,
     )
     chain = option.get_option_chain(req)
 
+    raw_count = len(chain)
     snapshots: list[OptionSnapshot] = []
     for occ_symbol, snap in chain.items():
         contract = _parse_occ_symbol(occ_symbol)
+        expiration, right, strike = contract
+        if not (expiry_gte <= expiration <= expiry_lte):
+            continue
+        if not (strike_low <= strike <= strike_high):
+            continue
         quote = getattr(snap, "latest_quote", None)
         greeks = getattr(snap, "greeks", None)
         iv = getattr(snap, "implied_volatility", None)
@@ -141,16 +147,17 @@ def fetch_chain(symbol: str, underlying_price: float, *,
         snapshots.append(OptionSnapshot(
             occ_symbol=occ_symbol,
             underlying=symbol,
-            expiration=contract[0],
-            strike=contract[2],
-            right=contract[1],
+            expiration=expiration,
+            strike=strike,
+            right=right,
             bid=bid, ask=ask, mid=mid,
             delta=delta,
             implied_volatility=iv,
         ))
-    if len(snapshots) >= 200:
-        logger.warning("fetch_chain(%s) returned %d contracts; server-side "
-                        "filters may not be applying as expected", symbol, len(snapshots))
+    if raw_count >= 200:
+        logger.warning("fetch_chain(%s) server returned %d contracts before "
+                        "client-side filtering (server-side filters may not "
+                        "be applying); narrowed to %d", symbol, raw_count, len(snapshots))
     return snapshots
 
 
