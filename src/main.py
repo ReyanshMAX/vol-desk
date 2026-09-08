@@ -98,8 +98,12 @@ def job_entry_scan() -> None:
             if intent is None:
                 continue
 
+            logger.info("entry_scan(%s): strategy chose %s, %d legs, net %.2f",
+                        sym, intent.structure.value, len(intent.legs), intent.net_credit)
+
             risk_verdict = risk.evaluate(intent, account, open_positions)
             if not risk_verdict.approved:
+                logger.info("entry_scan(%s): risk vetoed (%s)", sym, risk_verdict.veto_reason)
                 continue
 
             fill = orders.submit_with_ladder(intent, risk_verdict.qty)

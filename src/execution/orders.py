@@ -39,7 +39,8 @@ def _mcp_legs(legs: list, reverse_sides: bool = False) -> list[mcp_client.Leg]:
 
 
 def _run_ladder(mcp_legs: list[mcp_client.Leg], qty: int, base_price: float,
-                 side: Literal["credit", "debit"], *, is_opening: bool) -> FillResult:
+                 side: Literal["credit", "debit"], *, is_opening: bool,
+                 label: str = "") -> FillResult:
     cfg = config_module.load()
     ex = cfg.execution
     steps, step_pct, wait_s = ex["ladder_steps"], ex["ladder_step_pct"], ex["ladder_wait_seconds"]
@@ -51,6 +52,8 @@ def _run_ladder(mcp_legs: list[mcp_client.Leg], qty: int, base_price: float,
         else:
             limit = base_price * (1 + rung * step_pct)
 
+        logger.info("%s: rung %d/%d, qty=%d limit=%.2f (%s)",
+                    label, rung + 1, steps, qty, limit, side)
         order_id = mcp_client.place_mleg_order(mcp_legs, qty, limit, side, is_opening=is_opening)
         time.sleep(wait_s)
 
@@ -61,7 +64,9 @@ def _run_ladder(mcp_legs: list[mcp_client.Leg], qty: int, base_price: float,
         avg_price = getattr(match, "filled_avg_price", None) if match else None
 
         if status == "filled":
-            return FillResult("FILLED", qty, avg_price if avg_price is not None else limit, order_id)
+            price = avg_price if avg_price is not None else limit
+            logger.info("%s: FILLED qty=%d @ %.2f (order %s)", label, qty, price, order_id)
+            return FillResult("FILLED", qty, price, order_id)
         if status == "partially_filled":
             # Terminal at any rung, not just the last one: the next rung
             # would otherwise resubmit the ORIGINAL qty against a position
@@ -72,10 +77,13 @@ def _run_ladder(mcp_legs: list[mcp_client.Leg], qty: int, base_price: float,
             # immediately, matching CLAUDE.md rule 5 (never widen to chase
             # a fill, which includes never re-submitting on top of one).
             mcp_client.cancel_order(order_id)
+            logger.info("%s: PARTIAL qty=%s @ %s (order %s), stopping ladder",
+                        label, filled_qty, avg_price, order_id)
             return FillResult("PARTIAL", int(filled_qty or 0), avg_price, order_id)
 
         mcp_client.cancel_order(order_id)
 
+    logger.info("%s: ABANDONED, no fill inside %d rungs", label, steps)
     return FillResult("ABANDONED", 0, None, order_id)
 
 
@@ -87,7 +95,10 @@ def submit_with_ladder(intent: OrderIntent, qty: int) -> FillResult:
     base_price = abs(intent.net_credit)
     mcp_legs = _mcp_legs(intent.legs)
 
-    result = _run_ladder(mcp_legs, qty, base_price, side, is_opening=True)
+    label = f"OPEN {intent.symbol} {intent.structure.value}"
+    logger.info("%s: submitting, %d legs, qty=%d, target %s %.2f",
+                label, len(intent.legs), qty, side, base_price)
+    result = _run_ladder(mcp_legs, qty, base_price, side, is_opening=True, label=label)
 
     if result.status == "ABANDONED":
         repo.log_decision(
@@ -166,7 +177,9 @@ def close_structure(p: Position, reason: str) -> FillResult:
     mark = _mark_to_market(p.legs, chain_by_symbol)
     base_price = abs(mark) if mark is not None else abs(p.entry_credit)
 
-    result = _run_ladder(mcp_legs, p.qty, base_price, closing_side, is_opening=False)
+    label = f"CLOSE {p.underlying} {p.structure} ({reason})"
+    logger.info("%s: submitting, qty=%d, target %s %.2f", label, p.qty, closing_side, base_price)
+    result = _run_ladder(mcp_legs, p.qty, base_price, closing_side, is_opening=False, label=label)
 
     if result.status in ("FILLED", "PARTIAL") and result.fill_price is not None:
         close_price = result.fill_price
@@ -175,6 +188,7 @@ def close_structure(p: Position, reason: str) -> FillResult:
         else:
             entry_debit = -p.entry_credit
             realized_pnl = (close_price - entry_debit) * 100 * result.filled_qty
+        logger.info("%s: realized P&L $%.2f on %d contracts", label, realized_pnl, result.filled_qty)
 
         remaining_qty = p.qty - result.filled_qty
         if result.status == "FILLED" or remaining_qty <= 0:
