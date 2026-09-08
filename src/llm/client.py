@@ -5,6 +5,7 @@ No streaming, no tool use, no conversation history (docs/PROMPTS.md).
 """
 from __future__ import annotations
 
+import collections
 import json
 import logging
 import os
@@ -20,6 +21,34 @@ from src import config as config_module
 logger = logging.getLogger("vol_desk.llm")
 
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"
+
+# Confirmed live 2026-09-08: Groq's free tier caps openai/gpt-oss-120b at
+# 8000 tokens/minute (OPEN_QUESTIONS.md Q-004). A single entry_scan can call
+# construct() for several symbols back-to-back within seconds, so even
+# individually-small requests can sum past that budget within the same
+# rolling minute and get 413/429'd. This throttles client-side so this
+# process never offers Groq more than _TPM_BUDGET tokens in any 60s window,
+# waiting before a call would push it over instead of firing and failing.
+_TPM_BUDGET = 7000  # stay under the confirmed 8000 hard cap
+_rate_window: collections.deque[tuple[float, int]] = collections.deque()
+
+
+def _throttle_for_tokens(estimated_tokens: int) -> None:
+    while True:
+        now = time.monotonic()
+        while _rate_window and now - _rate_window[0][0] >= 60:
+            _rate_window.popleft()
+        used = sum(tok for _, tok in _rate_window)
+        if used + estimated_tokens <= _TPM_BUDGET:
+            return
+        wait_s = 60 - (now - _rate_window[0][0]) + 0.5
+        logger.info("llm rate limiter: waiting %.1fs for TPM budget (used=%d, need=%d)",
+                    wait_s, used, estimated_tokens)
+        time.sleep(max(wait_s, 0.5))
+
+
+def _record_tokens(n: int) -> None:
+    _rate_window.append((time.monotonic(), n))
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -90,6 +119,12 @@ def complete(
     fabricated response."""
     client = _get_client()
     model = _resolve_model(tier)
+
+    # rough estimate (chars/4) ahead of the call -- corrected with the real
+    # usage figures below once the response comes back
+    estimated_tokens = (len(system) + len(user)) // 4 + max_tokens
+    _throttle_for_tokens(estimated_tokens)
+
     started = time.monotonic()
     try:
         resp = client.chat.completions.create(
@@ -109,12 +144,15 @@ def complete(
     latency_ms = int((time.monotonic() - started) * 1000)
     choice = resp.choices[0]
     usage = resp.usage
+    prompt_tokens = usage.prompt_tokens if usage else estimated_tokens
+    completion_tokens = usage.completion_tokens if usage else 0
+    _record_tokens(prompt_tokens + completion_tokens)
     return LLMResponse(
         text=choice.message.content or "",
         model=resp.model,
         latency_ms=latency_ms,
-        prompt_tokens=usage.prompt_tokens if usage else 0,
-        completion_tokens=usage.completion_tokens if usage else 0,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
     )
 
 
