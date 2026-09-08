@@ -16,7 +16,11 @@ regime:
   stress_realized_vol: 0.45       # STRESS_REALIZED_VOL
   high_iv_rank: 0.50              # HIGH_IV_RANK
   range_threshold: 0.55           # RANGE_THRESHOLD
-  regime_ttl_minutes: 30          # REGIME_TTL_MINUTES
+  regime_ttl_minutes: 60          # REGIME_TTL_MINUTES -- doubled alongside
+                                   # cadences.regime_refresh_s so the cache stays
+                                   # warm on the new schedule instead of expiring
+                                   # mid-interval and pushing the LLM call into
+                                   # entry_scan instead (Q-004, 2026-09-08)
 
 strategy:
   dte_min: 7                      # DTE_MIN
@@ -31,7 +35,14 @@ strategy:
   max_debit_to_width: 0.45        # MAX_DEBIT_TO_WIDTH
   max_leg_spread_pct: 0.15        # MAX_LEG_SPREAD_PCT
   min_leg_open_interest: 100      # MIN_LEG_OPEN_INTEREST
-  strike_range_pct: 0.15          # STRIKE_RANGE_PCT (chain filtering)
+  strike_range_pct: 0.08          # STRIKE_RANGE_PCT (chain filtering) -- narrowed
+                                   # from 0.15: confirmed live 2026-09-08 that the
+                                   # unfiltered-plus-0.15 chain (hundreds of
+                                   # contracts) overflowed Groq's 8000 TPM free-tier
+                                   # limit on the reasoning tier (see OPEN_QUESTIONS.md
+                                   # Q-004). 0.08 still comfortably covers the
+                                   # short_delta_band/debit_long_delta_band targets
+                                   # plus wing width.
 
 management:
   take_profit_pct: 0.50           # TAKE_PROFIT_PCT
@@ -74,8 +85,10 @@ cadences:
   risk_monitor_s: 60
   manage_positions_s: 300
   iv_snapshot_s: 900
-  entry_scan_s: 900
-  regime_refresh_s: 1800
+  entry_scan_s: 1800              # was 900: halves LLM call volume (Q-004, 2026-09-08)
+  regime_refresh_s: 3600          # was 1800: same reason -- regime is cached
+                                   # regime_ttl_minutes anyway, so this only affects
+                                   # how often the cache is pre-warmed
   equity_snapshot_s: 900
 
 llm:
@@ -86,6 +99,7 @@ llm:
     reasoning: null   # structure construction
   max_retries: 1
   temperature: 0.2
-  regime_max_tokens: 400
-  strategy_max_tokens: 800
+  regime_max_tokens: 300          # was 400: response is a small fixed JSON object
+  strategy_max_tokens: 500        # was 800: same reason; both trimmed to shrink
+                                   # each call's share of the 8000 TPM budget (Q-004)
   timeout_s: 30

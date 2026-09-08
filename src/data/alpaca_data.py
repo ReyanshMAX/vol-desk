@@ -25,9 +25,13 @@ from alpaca.data.timeframe import TimeFrame
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import GetOptionContractsRequest
 
+from src.net_guard import ConnectivityGuard
+
 logger = logging.getLogger("vol_desk.alpaca_data")
 
 STRIKE_RANGE_PCT_DEFAULT = 0.15
+
+_guard = ConnectivityGuard("alpaca_data")
 
 
 @dataclass(frozen=True)
@@ -71,6 +75,7 @@ def fetch_daily_bars(symbol: str, days: int) -> list[Bar]:
     subscription for recent data and 403s with "subscription does not
     permit querying recent SIP data" on a free/paper account -- confirmed
     live 2026-09-03. IEX is the free-tier feed."""
+    _guard.check()
     stock, _, _ = _clients()
     end = datetime.utcnow()
     start = end - timedelta(days=days * 2)  # pad for weekends/holidays
@@ -82,7 +87,12 @@ def fetch_daily_bars(symbol: str, days: int) -> list[Bar]:
         adjustment="split",
         feed=DataFeed.IEX,
     )
-    bar_set = stock.get_stock_bars(req)
+    try:
+        bar_set = stock.get_stock_bars(req)
+    except Exception:
+        _guard.record_failure()
+        raise
+    _guard.record_success()
     bars = [
         Bar(ts=b.timestamp.date(), open=b.open, high=b.high, low=b.low,
             close=b.close, volume=b.volume)
@@ -95,9 +105,15 @@ def fetch_latest_price(symbol: str) -> float:
     """Latest trade price for the underlying. Equity trades are not subject
     to the options feed's 15-minute delay (docs/DATA.md). feed=DataFeed.IEX
     for the same reason as fetch_daily_bars -- SIP needs a paid subscription."""
+    _guard.check()
     stock, _, _ = _clients()
     req = StockLatestTradeRequest(symbol_or_symbols=symbol, feed=DataFeed.IEX)
-    trades = stock.get_stock_latest_trade(req)
+    try:
+        trades = stock.get_stock_latest_trade(req)
+    except Exception:
+        _guard.record_failure()
+        raise
+    _guard.record_success()
     return float(trades[symbol].price)
 
 
@@ -111,6 +127,7 @@ def fetch_chain(symbol: str, underlying_price: float, *,
     the unfiltered chain for 7 symbols every 15 minutes is wasteful on a
     free-tier VM.
     """
+    _guard.check()
     _, option, _ = _clients()
     today = date.today()
     expiry_gte = today + timedelta(days=dte_min)
@@ -126,7 +143,12 @@ def fetch_chain(symbol: str, underlying_price: float, *,
         strike_price_gte=strike_low,
         strike_price_lte=strike_high,
     )
-    chain = option.get_option_chain(req)
+    try:
+        chain = option.get_option_chain(req)
+    except Exception:
+        _guard.record_failure()
+        raise
+    _guard.record_success()
 
     raw_count = len(chain)
     snapshots: list[OptionSnapshot] = []
@@ -166,12 +188,18 @@ def fetch_option_bars(occ_symbols: list[str], on: date) -> dict[str, float]:
     OCC symbol for symbols that have a bar on that date (data begins Feb 2024,
     per docs/DATA.md). Missing symbols are simply absent from the result --
     callers must treat that as 'skip silently', not an error."""
+    _guard.check()
     _, option, _ = _clients()
     start = datetime(on.year, on.month, on.day)
     end = start + timedelta(days=1)
     req = OptionBarsRequest(symbol_or_symbols=occ_symbols, start=start, end=end,
                              timeframe=TimeFrame.Day, feed=OptionsFeed.INDICATIVE)
-    bar_set = option.get_option_bars(req)
+    try:
+        bar_set = option.get_option_bars(req)
+    except Exception:
+        _guard.record_failure()
+        raise
+    _guard.record_success()
     out: dict[str, float] = {}
     for sym in occ_symbols:
         bars = bar_set.get(sym) if hasattr(bar_set, "get") else bar_set.data.get(sym)
@@ -184,9 +212,15 @@ def fetch_open_interest(occ_symbol: str) -> int | None:
     """GET /v2/options/contracts for one contract. Open interest lags one
     day (docs/DATA.md). Called only for shortlisted legs, never the full
     chain (docs/STRATEGY.md)."""
+    _guard.check()
     _, _, trading = _clients()
     req = GetOptionContractsRequest(symbol=[occ_symbol])
-    resp = trading.get_option_contracts(req)
+    try:
+        resp = trading.get_option_contracts(req)
+    except Exception:
+        _guard.record_failure()
+        raise
+    _guard.record_success()
     contracts = getattr(resp, "option_contracts", resp)
     if not contracts:
         return None
